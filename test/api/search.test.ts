@@ -71,6 +71,7 @@ test('index, document, search, delete, pagination, and restart recovery work tog
         config: {
           searchableFields: { title: { boost: 2 }, description: { boost: 1 } },
           storedFields: ['title', 'description'],
+          filterableFields: ['category', 'price'],
         },
       }),
     });
@@ -79,10 +80,31 @@ test('index, document, search, delete, pagination, and restart recovery work tog
     for (const [id, fields] of [
       [
         'one',
-        { title: 'MacBook Air', description: 'Lightweight laptop with excellent battery life' },
+        {
+          title: 'MacBook Air',
+          description: 'Lightweight laptop with excellent battery life',
+          category: 'laptop',
+          price: 799,
+        },
       ],
-      ['two', { title: 'Laptop stand', description: 'Adjustable desk accessory' }],
-      ['three', { title: 'Battery charger', description: 'Portable power accessory' }],
+      [
+        'two',
+        {
+          title: 'Laptop stand',
+          description: 'Adjustable desk accessory',
+          category: 'accessory',
+          price: 99,
+        },
+      ],
+      [
+        'three',
+        {
+          title: 'Battery charger',
+          description: 'Portable power accessory',
+          category: 'power',
+          price: 49,
+        },
+      ],
     ] as const) {
       const response = await jsonRequest(`${baseUrl}/v1/indexes/products/documents/${id}`, {
         method: 'PUT',
@@ -106,6 +128,29 @@ test('index, document, search, delete, pagination, and restart recovery work tog
     assert.equal(firstPage.hits.length, 1);
     assert.ok(firstPage.nextCursor !== null);
     assert.ok(firstPage.indexVersion >= 4);
+
+    const filteredResponse = await fetch(
+      `${baseUrl}/v1/indexes/products/search?q=laptop&filter=${encodeURIComponent(JSON.stringify({ category: 'laptop', price: { gte: 500 } }))}`,
+    );
+    assert.equal(filteredResponse.status, 200);
+    const filteredBody = (await filteredResponse.json()) as {
+      hits: Array<{ id: string }>;
+      totalHits: number;
+    };
+    assert.equal(filteredBody.totalHits, 1);
+    assert.deepEqual(
+      filteredBody.hits.map((hit) => hit.id),
+      ['one'],
+    );
+
+    const invalidFilterResponse = await fetch(
+      `${baseUrl}/v1/indexes/products/search?q=laptop&filter=${encodeURIComponent(JSON.stringify({ secret: true }))}`,
+    );
+    assert.equal(invalidFilterResponse.status, 400);
+    assert.equal((await invalidFilterResponse.json()).error.code, 'invalid_filter');
+
+    const queryWithoutTerms = await fetch(`${baseUrl}/v1/indexes/products/search?q=%21%21%21`);
+    assert.equal(queryWithoutTerms.status, 400);
 
     const secondPageResponse = await fetch(
       `${baseUrl}/v1/indexes/products/search?q=laptop&limit=1&cursor=${encodeURIComponent(firstPage.nextCursor ?? '')}`,

@@ -10,6 +10,7 @@ import {
   decodeCursor,
 } from '../indexing/inverted-index';
 import { manifestPath, readManifest, readSegment, writeSegmentAtomic } from '../indexing/segment';
+import type { SearchFilters } from '../query/filters';
 import {
   parseIndexConfig,
   type IndexMetadata,
@@ -211,6 +212,7 @@ export class IndexManager {
     query: string,
     limit: number,
     cursorValue: string | undefined,
+    filters: SearchFilters = {},
   ): SearchResponse | undefined {
     const runtime = this.indexes.get(indexName);
     if (runtime === undefined) {
@@ -222,7 +224,7 @@ export class IndexManager {
       throw new Error('invalid_cursor');
     }
     return {
-      page: runtime.index.search(query, limit, cursor),
+      page: runtime.index.search(query, limit, cursor, filters),
       indexVersion: runtime.generation,
     };
   }

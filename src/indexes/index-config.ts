@@ -13,6 +13,8 @@ export interface IndexConfig {
   readonly searchableFields: Readonly<Record<string, SearchableFieldConfig>>;
   readonly storedFields: readonly string[];
   readonly maxTokenLength: number;
+  readonly filterableFields?: readonly string[];
+  readonly maxQueryTerms?: number;
 }
 
 export interface IndexMetadata {
@@ -104,6 +106,19 @@ export function parseIndexConfig(value: unknown): IndexConfig {
     validateFieldName(fieldName);
   }
 
+  const filterableFieldsValue = value.filterableFields ?? [];
+  if (
+    !Array.isArray(filterableFieldsValue) ||
+    filterableFieldsValue.some(
+      (fieldName) => typeof fieldName !== 'string' || !IDENTIFIER_PATTERN.test(fieldName),
+    )
+  ) {
+    throw new ValidationError('filterableFields must be an array of valid field names');
+  }
+  for (const fieldName of filterableFieldsValue) {
+    validateFieldName(fieldName);
+  }
+
   const maxTokenLengthValue = value.maxTokenLength ?? 128;
   if (
     typeof maxTokenLengthValue !== 'number' ||
@@ -114,10 +129,22 @@ export function parseIndexConfig(value: unknown): IndexConfig {
     throw new ValidationError('maxTokenLength must be an integer between 8 and 1024');
   }
 
+  const maxQueryTermsValue = value.maxQueryTerms ?? 32;
+  if (
+    typeof maxQueryTermsValue !== 'number' ||
+    !Number.isSafeInteger(maxQueryTermsValue) ||
+    maxQueryTermsValue < 1 ||
+    maxQueryTermsValue > 256
+  ) {
+    throw new ValidationError('maxQueryTerms must be an integer between 1 and 256');
+  }
+
   return {
     searchableFields,
     storedFields: [...new Set(storedFields)],
     maxTokenLength: maxTokenLengthValue,
+    filterableFields: [...new Set(filterableFieldsValue)],
+    maxQueryTerms: maxQueryTermsValue,
   };
 }
 

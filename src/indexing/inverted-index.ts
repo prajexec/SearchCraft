@@ -1,6 +1,7 @@
 import type { IndexConfig } from '../indexes/index-config';
 import type { SearchDocument } from '../indexes/index-config';
 import { bm25Score } from '../query/bm25';
+import { matchesFilters, type SearchFilters } from '../query/filters';
 import type {
   SerializedDocument,
   SerializedPosting,
@@ -38,6 +39,13 @@ export interface SearchPage {
 export interface SearchCursor {
   readonly score: number;
   readonly id: string;
+}
+
+export class QueryLimitError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'QueryLimitError';
+  }
 }
 
 function termKey(field: string, term: string): string {
@@ -163,10 +171,22 @@ export class InvertedIndex {
     return this.documents.get(documentId)?.version;
   }
 
-  public search(query: string, limit: number, cursor: SearchCursor | undefined): SearchPage {
+  public search(
+    query: string,
+    limit: number,
+    cursor: SearchCursor | undefined,
+    filters: SearchFilters = {},
+  ): SearchPage {
     const queryTerms = [
       ...new Set(tokenize(query, this.config.maxTokenLength).map((token) => token.term)),
     ];
+    if (queryTerms.length === 0) {
+      throw new QueryLimitError('The query contains no searchable terms');
+    }
+    const maxQueryTerms = this.config.maxQueryTerms ?? 32;
+    if (queryTerms.length > maxQueryTerms) {
+      throw new QueryLimitError(`The query contains more than ${maxQueryTerms} searchable terms`);
+    }
     const scores = new Map<string, number>();
     const averageLengths = new Map<string, number>();
     for (const fieldName of Object.keys(this.config.searchableFields)) {
@@ -181,7 +201,11 @@ export class InvertedIndex {
         }
         for (const posting of postingMap.values()) {
           const document = this.documents.get(posting.documentId);
-          if (document === undefined || document.version !== posting.documentVersion) {
+          if (
+            document === undefined ||
+            document.version !== posting.documentVersion ||
+            !matchesFilters(document.fields, filters)
+          ) {
             continue;
           }
           const score = bm25Score({

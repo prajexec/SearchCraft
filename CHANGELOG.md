@@ -20,8 +20,9 @@ All notable changes to SearchCraft are recorded here.
 - Durable SQLite indexing jobs with bounded queue admission.
 - One indexing worker with processing leases, orphan recovery, retries, and stale-version protection.
 - Job inspection, retry, and index status endpoints.
+- Configured exact-match and numeric-range filters with safe query parsing.
+- Query term-count and punctuation-only safeguards.
 
 ### Not yet implemented
 
-- Bulk NDJSON ingestion, filters, immutable multi-segment compaction, reindexing, and snapshots.
-- Bulk NDJSON ingestion, filters, and operational job inspection.
+- Bulk NDJSON ingestion, immutable multi-segment compaction, reindexing, and snapshots.

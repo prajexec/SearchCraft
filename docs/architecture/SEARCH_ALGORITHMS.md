@@ -52,6 +52,22 @@ Search returns exact `totalHits` for the current in-memory generation. A cursor 
 
 The cursor is not a promise that results remain stable after an update. Clients should treat `indexVersion` as the generation observed and restart pagination if they require a consistent result set across mutations.
 
+## Filters and query safeguards
+
+Indexes explicitly list `filterableFields`. The search API accepts a URL-encoded JSON object in the `filter` query parameter:
+
+```json
+{
+  "category": "laptop",
+  "available": true,
+  "price": { "gte": 500, "lt": 1500 }
+}
+```
+
+Scalar filters use exact equality. A string filter against a string array matches membership. Numeric ranges support `gt`, `gte`, `lt`, and `lte`; range operands must be finite numbers. Unknown fields and unsupported operators are rejected before posting lookup, so the filter path never becomes a SQL or filesystem expression.
+
+Each index also bounds unique query terms with `maxQueryTerms` (default `32`). Queries that contain only punctuation or exceed that term count return `400` rather than creating unbounded candidate work.
+
 ## Current limitations
 
 - All candidates are scored in memory after posting lookup.

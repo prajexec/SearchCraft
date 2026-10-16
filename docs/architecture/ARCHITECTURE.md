@@ -51,7 +51,7 @@ The current indexing boundary owns Unicode tokenization, field-aware posting con
 
 ### Query engine
 
-The query boundary owns query tokenization, term lookup, candidate retrieval, BM25 scoring, stable ordering, and cursor pagination. Filters are a later phase. It receives an index-generation reader rather than opening HTTP or SQLite connections itself.
+The query boundary owns query tokenization, term lookup, candidate retrieval, BM25 scoring, configured exact/range filters, stable ordering, and cursor pagination. It receives an index-generation reader rather than opening HTTP or SQLite connections itself.
 
 ### Maintenance
 

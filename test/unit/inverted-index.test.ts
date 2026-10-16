@@ -11,20 +11,41 @@ const config: IndexConfig = {
   },
   storedFields: ['title', 'description'],
   maxTokenLength: 64,
+  filterableFields: ['category', 'price'],
 };
 
 test('inverted index ranks matching documents and round-trips through a segment snapshot', () => {
   const index = new InvertedIndex('products', config);
   index.upsert(
-    { id: 'one', fields: { title: 'MacBook Air', description: 'Portable computer' } },
+    {
+      id: 'one',
+      fields: {
+        title: 'MacBook Air',
+        description: 'Portable computer',
+        category: 'laptop',
+        price: 799,
+      },
+    },
     1,
   );
-  index.upsert({ id: 'two', fields: { title: 'Laptop stand', description: 'Desk accessory' } }, 1);
+  index.upsert(
+    {
+      id: 'two',
+      fields: {
+        title: 'Laptop stand',
+        description: 'Desk accessory',
+        category: 'accessory',
+        price: 99,
+      },
+    },
+    1,
+  );
 
   const page = index.search('macbook', 10, undefined);
   assert.equal(page.totalHits, 1);
   assert.equal(page.hits[0]?.id, 'one');
   assert.ok((page.hits[0]?.score ?? 0) > 0);
+  assert.equal(index.search('portable', 10, undefined, { category: 'accessory' }).totalHits, 0);
 
   const restored = InvertedIndex.fromSnapshot('products', config, index.toSnapshot(4));
   const restoredPage = restored.search('macbook', 10, undefined);

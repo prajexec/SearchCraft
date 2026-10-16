@@ -214,6 +214,15 @@ export const openapiDocument = {
             schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
           },
           { name: 'cursor', in: 'query', required: false, schema: { type: 'string' } },
+          {
+            name: 'filter',
+            in: 'query',
+            required: false,
+            description:
+              'URL-encoded JSON object of configured exact-match or numeric-range filters.',
+            schema: { type: 'string' },
+            example: '{"category":"laptop","price":{"gte":500}}',
+          },
         ],
         responses: {
           '200': {
@@ -223,7 +232,7 @@ export const openapiDocument = {
             },
           },
           '400': {
-            description: 'Invalid query, limit, or cursor.',
+            description: 'Invalid query, limit, cursor, or filter.',
             content: {
               'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
             },
@@ -356,6 +365,8 @@ export const openapiDocument = {
           },
           storedFields: { type: 'array', items: { type: 'string' } },
           maxTokenLength: { type: 'integer', minimum: 8, maximum: 1024, default: 128 },
+          filterableFields: { type: 'array', items: { type: 'string' } },
+          maxQueryTerms: { type: 'integer', minimum: 1, maximum: 256, default: 32 },
         },
       },
       CreateIndexRequest: {

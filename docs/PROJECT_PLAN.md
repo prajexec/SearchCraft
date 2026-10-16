@@ -19,7 +19,7 @@ SearchCraft is a lightweight, self-contained search indexing and query service. 
 | 0     | Project foundation, operational endpoints, SQLite migrations, docs, diagrams | Complete |
 | 1     | Searchable vertical slice, tokenization, inverted index, BM25                | Complete |
 | 2     | Durable asynchronous indexing and recovery                                   | Complete |
-| 3     | Filters, field boosts, and cursor pagination                                 | Planned  |
+| 3     | Filters, field boosts, and cursor pagination                                 | Complete |
 | 4     | Versioned immutable segments and compaction                                  | Planned  |
 | 5     | Streaming bulk ingestion and operational metrics                             | Planned  |
 | 6     | Generations, reindexing, snapshots, and online swaps                         | Planned  |
@@ -66,9 +66,21 @@ Phase 1 was committed as `a6aa0f5` (`feat: add searchable vertical slice`).
 
 Phase 2 acceptance criteria are verified by the asynchronous API, worker, transaction, recovery, and job-state tests.
 
+## Phase 3 acceptance criteria
+
+- Index configuration can explicitly allow filterable fields.
+- Search supports exact scalar filters and membership in string arrays.
+- Search supports finite numeric `gt`, `gte`, `lt`, and `lte` ranges.
+- Unknown fields, malformed JSON, unsupported operators, and non-numeric ranges fail before search execution.
+- Query terms are bounded per index and punctuation-only queries return a clear `400` error.
+- Filtered totals and cursor pages remain deterministic.
+- Filter behavior and query safeguards are covered by unit and API tests and documented in the search algorithm reference.
+
+Phase 3 acceptance criteria are verified by filter parser, inverted-index, and API search tests.
+
 ## Next implementation slice
 
-The next slice is Phase 3: add typed exact-match and numeric range filters, field boost tuning, query safeguards, and cursor pagination semantics for the asynchronous production API.
+The next slice is Phase 4: replace full-snapshot rewrites with multiple immutable segments, add segment validation and compaction, and preserve search correctness across merges and tombstones.
 
 ## Required evidence for each phase
 
@@ -83,7 +95,7 @@ Every phase must finish with:
 
 ## Known gaps at project start
 
-- Bulk NDJSON ingestion, filters, compaction, snapshots, and online generation swaps are not implemented yet.
+- Bulk NDJSON ingestion, compaction, snapshots, and online generation swaps are not implemented yet.
 - No external benchmark result exists; the current benchmark script measures only the foundation health endpoint.
 - No authentication or multitenancy is planned for the local-first trust boundary.
 - No license has been selected, so the repository is currently marked `UNLICENSED`.

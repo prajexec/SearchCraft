@@ -33,7 +33,7 @@ The implementation will favor correctness, explicit consistency semantics, bound
 | Custom inverted index and tokenizer                     | Implemented                          |
 | BM25 ranking                                            | Implemented                          |
 | Durable asynchronous indexing worker                    | Implemented                          |
-| Filters and cursor pagination                           | Planned for Phase 3                  |
+| Filters and cursor pagination                           | Implemented                          |
 | Immutable segments and compaction                       | Planned for Phase 4                  |
 | Bulk ingestion, reindexing, snapshots, and online swaps | Planned for later phases             |
 
@@ -177,7 +177,7 @@ SQLite and filesystem writes cannot share one atomic transaction. The planned se
 ## Known limitations
 
 - The worker currently rewrites one inspectable JSON snapshot per completed job; this is intentionally bounded for small datasets but not the final multi-segment architecture.
-- Filters, bulk NDJSON ingestion, compaction, reindexing, snapshots, and online generation swaps are not implemented yet.
+- Bulk NDJSON ingestion, compaction, reindexing, snapshots, and online generation swaps are not implemented yet.
 - The current metrics registry is process-local and intentionally lightweight.
 - The current benchmark does not represent search workload behavior.
 - There is no authentication, multitenancy, or distributed rate limiting.

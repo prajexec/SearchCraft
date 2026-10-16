@@ -7,6 +7,7 @@ import type { Config } from './config';
 import { AppError, errorPayload } from './http/errors';
 import { openapiDocument } from './http/openapi';
 import type { IndexManager } from './indexes/index-manager';
+import { QueryLimitError } from './indexing/inverted-index';
 import {
   parseSearchDocument,
   ValidationError,
@@ -15,6 +16,7 @@ import {
 } from './indexes/index-config';
 import type { Logger } from './observability/logger';
 import type { Metrics } from './observability/metrics';
+import { FilterValidationError, parseFilters, type SearchFilters } from './query/filters';
 import { QueueSaturatedError } from './storage/documents';
 
 export interface AppDependencies {
@@ -304,24 +306,48 @@ async function handleRequest(
       ensureMethod(request, 'GET');
       const indexManager = requireIndexManager(dependencies);
       const indexName = requireIndexName(searchMatch[1] ?? '');
+      const index = indexManager.getIndex(indexName);
+      if (index === undefined) {
+        throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+      }
       const query = url.searchParams.get('q') ?? '';
       if (query.trim().length === 0) {
         throw new AppError(400, 'missing_query', 'The q query parameter is required');
       }
       const limit = parseLimit(url.searchParams.get('limit'));
       const cursor = url.searchParams.get('cursor') ?? undefined;
+      let filters: SearchFilters;
+      try {
+        filters = parseFilters(
+          url.searchParams.get('filter') ?? undefined,
+          index.config.filterableFields ?? [],
+        );
+      } catch (error) {
+        if (error instanceof FilterValidationError) {
+          throw new AppError(400, 'invalid_filter', error.message);
+        }
+        throw error;
+      }
       const startedSearchAt = performance.now();
       let result;
       try {
-        result = indexManager.search(indexName, query, limit, cursor);
+        result = indexManager.search(indexName, query, limit, cursor, filters);
       } catch (error) {
         if (error instanceof Error && error.message === 'invalid_cursor') {
           throw new AppError(400, 'invalid_cursor', 'The cursor is not valid for this search');
         }
+        if (error instanceof QueryLimitError) {
+          throw new AppError(400, 'query_too_complex', error.message);
+        }
         throw error;
       }
+      // The index existence check above ensures this result is present.
       if (result === undefined) {
-        throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+        throw new AppError(
+          503,
+          'index_service_unavailable',
+          'The index service is not initialized',
+        );
       }
       sendJson(response, 200, {
         hits: result.page.hits,
