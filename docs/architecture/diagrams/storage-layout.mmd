@@ -1,0 +1,21 @@
+flowchart TB
+    Data[data/]
+    DB[searchcraft.sqlite]
+    WAL[SQLite WAL and shared memory files]
+    Indexes[indexes/]
+    Named[<index-name>/]
+    Manifest[manifest.json]
+    Generations[generations/]
+    Generation[generation-N.json]
+    Staging[staging/ planned]
+    Snapshots[snapshots/ planned]
+
+    Data --> DB
+    Data --> WAL
+    Data --> Indexes
+    Indexes --> Named
+    Named --> Manifest
+    Named --> Generations
+    Generations --> Generation
+    Named -. future .-> Staging
+    Named -. future .-> Snapshots

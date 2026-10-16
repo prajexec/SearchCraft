@@ -1,0 +1,9 @@
+stateDiagram-v2
+    [*] --> Staging: write generation file
+    Staging --> Validating: file renamed
+    Validating --> Active: manifest published
+    Validating --> Retained: validation failed
+    Active --> Retired: newer generation active
+    Retired --> Removed: retention cleanup
+    Removed --> [*]
+    Active --> Staging: next synchronous mutation

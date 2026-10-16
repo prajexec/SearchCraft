@@ -1,0 +1,12 @@
+flowchart TD
+    Crash[Process or filesystem interruption] --> Source{SQLite source mutation committed?}
+    Source -- No --> Request[Caller retries request]
+    Source -- Yes --> Manifest{Valid active manifest and generation?}
+    Manifest -- Yes --> Load[Load published snapshot]
+    Manifest -- No --> Rebuild[Rebuild active index from non-deleted SQLite documents]
+    Load --> Ready[Expose readiness]
+    Rebuild --> Publish[Write recovered generation and manifest]
+    Publish --> Ready
+    Request --> Ready
+
+    Jobs[Phase 2 pending or processing jobs] -. future .-> Replay[Claim/retry after restart]

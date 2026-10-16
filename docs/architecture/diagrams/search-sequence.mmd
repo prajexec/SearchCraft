@@ -1,0 +1,19 @@
+sequenceDiagram
+    participant C as Client
+    participant H as HTTP API
+    participant Q as Query engine
+    participant T as Tokenizer
+    participant P as Posting lists
+    participant B as BM25 scorer
+
+    C->>H: GET /v1/indexes/{index}/search?q=...
+    H->>H: Validate query, limit, and cursor
+    H->>Q: Search query
+    Q->>T: Tokenize normalized query
+    T-->>Q: Unique query terms
+    Q->>P: Look up (field, term) postings
+    P-->>Q: Candidate postings and statistics
+    Q->>B: Score candidates with field boosts
+    B-->>Q: Deterministic score and ID ordering
+    Q-->>H: Page, exact total, and next cursor
+    H-->>C: JSON search response

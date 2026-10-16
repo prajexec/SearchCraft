@@ -11,9 +11,15 @@ const requiredFiles = [
   'docs/PROJECT_PLAN.md',
   'docs/api/openapi.json',
   'docs/architecture/ARCHITECTURE.md',
+  'docs/architecture/SEARCH_ALGORITHMS.md',
+  'docs/architecture/STORAGE_FORMAT.md',
+  'docs/architecture/FAILURE_MODES.md',
+  'docs/architecture/SECURITY.md',
   'docs/development/SETUP.md',
   'docs/development/TESTING.md',
+  'docs/development/BENCHMARKING.md',
   'docs/operations/RUNBOOK.md',
+  'docs/operations/RECOVERY.md',
   'docs/decisions/ADR-0001-lightweight-architecture.md',
 ];
 

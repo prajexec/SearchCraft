@@ -1,0 +1,19 @@
+sequenceDiagram
+    participant C as Client
+    participant H as HTTP API
+    participant S as SQLite document store
+    participant I as Index manager
+    participant W as Snapshot writer
+
+    C->>H: PUT /v1/indexes/{index}/documents/{id}
+    H->>H: Validate path, content type, body, and fields
+    H->>S: Transactional source-document upsert
+    S-->>H: New document version
+    H->>I: Tokenize and update postings
+    I->>W: Write generation staging file
+    W->>W: Rename generation, then manifest
+    W-->>I: Published index version
+    I-->>H: Search-visible result
+    H-->>C: 200 version + indexVersion
+
+    Note over C,W: Phase 2 will insert a durable job in the SQLite transaction and return 202 before the worker runs.

@@ -2,7 +2,7 @@
 
 SearchCraft is a lightweight, self-contained search indexing and query service written in strict TypeScript. It is designed as a portfolio-grade backend system that makes search-engine mechanics and operational tradeoffs visible rather than delegating them to OpenSearch or Elasticsearch.
 
-> **Current status:** Phase 0 foundation. The service currently exposes operational endpoints, SQLite migrations, structured logs, basic metrics, and OpenAPI metadata. The document ingestion and keyword search pipeline is the next implementation slice and is intentionally not claimed as complete yet.
+> **Current status:** Phase 1 searchable vertical slice. The service exposes operational endpoints, named indexes, durable source documents, a custom Unicode-aware inverted index, BM25 ranking, cursor pagination, and restart recovery. Asynchronous jobs, bulk ingestion, filters, compaction, snapshots, and online generation swaps remain later phases.
 
 ## Why this project exists
 
@@ -29,9 +29,9 @@ The implementation will favor correctness, explicit consistency semantics, bound
 | JSON and Prometheus-compatible process metrics          | Implemented                          |
 | OpenAPI endpoint and checked-in specification           | Implemented for foundation endpoints |
 | Structured JSON logging and request IDs                 | Implemented                          |
-| Named indexes and document ingestion                    | Planned for Phase 1                  |
-| Custom inverted index and tokenizer                     | Planned for Phase 1                  |
-| BM25 ranking                                            | Planned for Phase 1                  |
+| Named indexes and document ingestion                    | Implemented synchronously            |
+| Custom inverted index and tokenizer                     | Implemented                          |
+| BM25 ranking                                            | Implemented                          |
 | Durable asynchronous indexing worker                    | Planned for Phase 2                  |
 | Filters and cursor pagination                           | Planned for Phase 3                  |
 | Immutable segments and compaction                       | Planned for Phase 4                  |
@@ -45,12 +45,13 @@ The initial runtime is one Node.js process with a local SQLite database and conf
 flowchart LR
     Client[Application client] --> HTTP[Node.js HTTP API]
     HTTP --> Health[Health/readiness/metrics]
-    HTTP -. future .-> Documents[Document and search routes]
+    HTTP --> Documents[Document and search routes]
     HTTP --> SQLite[(SQLite metadata and durable jobs)]
-    Documents -. future .-> Worker[Bounded indexing worker]
-    Worker -. future .-> Segments[(Immutable index generations)]
-    HTTP -. future .-> Query[Query engine and BM25]
-    Query -. future .-> Segments
+    Documents --> Index[Index manager and custom index]
+    Index --> Segments[(Versioned JSON index snapshots)]
+    HTTP --> Query[Query engine and BM25]
+    Query --> Index
+    Documents -. Phase 2 .-> Worker[Bounded indexing worker]
 ```
 
 More diagrams and architecture decisions are in [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md), [`docs/architecture/diagrams/`](docs/architecture/diagrams/), and [`docs/decisions/`](docs/decisions/).
@@ -94,7 +95,7 @@ npm run db:migrate
 
 The default runtime directory is `./data`. It contains the SQLite database and, as later phases are implemented, index generations, staging data, and snapshots. Configure paths and safeguards with environment variables; see [`.env.example`](.env.example).
 
-## Run the foundation
+## Run SearchCraft
 
 ```bash
 npm run build
@@ -119,7 +120,21 @@ curl -s http://127.0.0.1:3000/metrics/prometheus
 curl -s http://127.0.0.1:3000/openapi.json | jq
 ```
 
-The search and document examples will be added when those routes are backed by real implementations.
+Create an index, index documents, and search them:
+
+```bash
+curl -sS -X POST http://127.0.0.1:3000/v1/indexes \
+  -H 'content-type: application/json' \
+  -d '{"name":"products","config":{"searchableFields":{"title":{"boost":2},"description":{"boost":1}},"storedFields":["title","description"]}}'
+
+curl -sS -X PUT http://127.0.0.1:3000/v1/indexes/products/documents/product-123 \
+  -H 'content-type: application/json' \
+  -d '{"fields":{"title":"MacBook Air M1","description":"Lightweight laptop with excellent battery life"}}'
+
+curl -sS 'http://127.0.0.1:3000/v1/indexes/products/search?q=battery&limit=20' | jq
+```
+
+Phase 1 writes are synchronous: `searchVisible: true` means the current process has published the new snapshot. Phase 2 will change document writes to durable asynchronous operations with job IDs.
 
 ## Quality checks
 
@@ -160,7 +175,8 @@ SQLite and filesystem writes cannot share one atomic transaction. The planned se
 
 ## Known limitations
 
-- Search, indexing, filters, pagination, and snapshots are not implemented in the current foundation.
+- Indexing is synchronous and currently rewrites one inspectable JSON snapshot per mutation; this is intentionally bounded for small datasets but not the final segment architecture.
+- Filters, bulk NDJSON ingestion, durable worker jobs, compaction, reindexing, snapshots, and online generation swaps are not implemented yet.
 - The current metrics registry is process-local and intentionally lightweight.
 - The current benchmark does not represent search workload behavior.
 - There is no authentication, multitenancy, or distributed rate limiting.

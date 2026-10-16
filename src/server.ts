@@ -1,5 +1,6 @@
 import { createApp } from './app';
 import { loadConfig } from './config';
+import { IndexManager } from './indexes/index-manager';
 import { Logger } from './observability/logger';
 import { Metrics } from './observability/metrics';
 import { initializeDatabase } from './storage/sqlite';
@@ -8,7 +9,9 @@ const config = loadConfig();
 const logger = new Logger(config.logLevel);
 const database = initializeDatabase(config.dbPath);
 const metrics = new Metrics();
-const server = createApp({ config, database: database.connection, logger, metrics });
+const indexManager = new IndexManager(database.connection, config);
+indexManager.load();
+const server = createApp({ config, database: database.connection, logger, metrics, indexManager });
 
 let shuttingDown = false;
 

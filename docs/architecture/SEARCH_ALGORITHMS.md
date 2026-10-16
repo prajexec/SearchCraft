@@ -1,0 +1,61 @@
+# Search Algorithms
+
+## Tokenization
+
+SearchCraft's Phase 1 tokenizer applies Unicode NFKC normalization, converts text to lowercase with the `en-US` locale, and extracts runs of Unicode letters and numbers using `\p{L}` and `\p{N}`. Punctuation is a separator. Each extracted token receives a zero-based position. Tokens longer than the configured `maxTokenLength` are skipped while their position is still consumed.
+
+The tokenizer is deliberately deterministic and language-neutral. It does not perform stemming, stop-word removal, synonym expansion, or language detection yet. Those choices affect recall and must be introduced as explicit index-configuration or analyzer-version decisions rather than hidden in the query path.
+
+## Inverted index
+
+The Phase 1 in-process index stores:
+
+```text
+(field, term) -> document ID -> {
+  document version,
+  term frequency,
+  token positions
+}
+```
+
+Each indexed document also stores its configured field lengths and the stored source fields returned in a hit. Updating a document removes its existing postings before adding postings for the new version. Deleting a document removes it from the active in-process index and persists a SQLite tombstone.
+
+The first persisted representation is a complete, inspectable JSON snapshot. It is versioned with `magic: SEARCHCRAFT_SEGMENT` and `formatVersion: 1`. This is intentionally easy to inspect while the dataset is small. It rewrites the full snapshot after each synchronous mutation, so it is not the final high-throughput segment architecture.
+
+## BM25
+
+SearchCraft uses the standard BM25 term score with `k1 = 1.2` and `b = 0.75`:
+
+```text
+IDF(t) = ln(1 + (N - df(t) + 0.5) / (df(t) + 0.5))
+
+score(t, d) = IDF(t) *
+             (tf(t,d) * (k1 + 1)) /
+             (tf(t,d) + k1 * (1 - b + b * |d| / avgdl))
+```
+
+Where:
+
+- `N` is the number of active documents in the index.
+- `df(t)` is the number of active documents containing term `t` in the field.
+- `tf(t,d)` is the term frequency in the field of document `d`.
+- `|d|` is the field token length of document `d`.
+- `avgdl` is the average active field length.
+- `k1` controls term-frequency saturation.
+- `b` controls document-length normalization.
+
+Scores are summed across query terms and searchable fields. Each field has a positive configured boost. Query terms are deduplicated after tokenization so repeating a term in the query does not accidentally multiply its contribution. Results are ordered by score descending and document ID ascending for deterministic ties.
+
+## Pagination
+
+Search returns exact `totalHits` for the current in-memory generation. A cursor encodes the last returned score and ID as base64url JSON. The next page contains hits with a lower score, or the same score and a lexicographically greater ID. This gives stable pagination for an unchanged generation without offset scanning.
+
+The cursor is not a promise that results remain stable after an update. Clients should treat `indexVersion` as the generation observed and restart pagination if they require a consistent result set across mutations.
+
+## Current limitations
+
+- All candidates are scored in memory after posting lookup.
+- Posting lists and term dictionaries are not compressed.
+- The complete JSON snapshot is rewritten for every synchronous mutation.
+- Phrase queries, filters, range scoring, synonyms, stemming, and vector search are not implemented.
+- A future multi-segment reader and compactor must preserve the version and tombstone invariants tested here.

@@ -16,8 +16,8 @@ SearchCraft is a lightweight, self-contained search indexing and query service. 
 
 | Phase | Scope                                                                        | Status      |
 | ----- | ---------------------------------------------------------------------------- | ----------- |
-| 0     | Project foundation, operational endpoints, SQLite migrations, docs, diagrams | In progress |
-| 1     | Searchable vertical slice, tokenization, inverted index, BM25                | Planned     |
+| 0     | Project foundation, operational endpoints, SQLite migrations, docs, diagrams | Complete    |
+| 1     | Searchable vertical slice, tokenization, inverted index, BM25                | In progress |
 | 2     | Durable asynchronous indexing and recovery                                   | Planned     |
 | 3     | Filters, field boosts, and cursor pagination                                 | Planned     |
 | 4     | Versioned immutable segments and compaction                                  | Planned     |
@@ -36,9 +36,25 @@ SearchCraft is a lightweight, self-contained search indexing and query service. 
 - The architecture, resource constraints, and current limitations are documented.
 - Foundational Mermaid diagrams describe the implemented foundation and clearly label future boundaries.
 
+Phase 0 was committed as `a257cea` (`chore: initialize lightweight TypeScript project`).
+
+## Phase 1 acceptance criteria
+
+- A client can create a named index with explicit searchable and stored fields.
+- A client can upsert, retrieve, and delete structured source documents.
+- Text is normalized and tokenized with Unicode-aware deterministic rules.
+- A custom inverted index stores term frequencies, positions, field lengths, and document versions.
+- BM25 scores candidates with field boosts and deterministic tie-breaking.
+- Search supports exact total-hit semantics and cursor pagination.
+- Index snapshots are written through a staging file and atomic manifest publication.
+- The active index can be loaded after a process restart.
+- Unit, API, and restart integration tests protect these behaviors.
+
+Phase 1 is intentionally synchronous. A successful document mutation is durably stored in SQLite and is returned only after the in-process index snapshot is published. Phase 2 will move this work to a durable asynchronous queue with explicit eventual-consistency semantics.
+
 ## Next implementation slice
 
-The next slice is the smallest useful search flow: create an index, persist a source document, tokenize configured text fields, construct an in-memory segment backed by a versioned on-disk format, calculate BM25, and return deterministic search results. It will be implemented behind service interfaces so the later durable worker can use the same indexing engine.
+The next slice is Phase 2: persist indexing jobs in the existing SQLite schema, add a bounded worker loop, expose job and index status, recover claimed work after restart, and make the API return `202 Accepted` with observable eventual consistency.
 
 ## Required evidence for each phase
 
@@ -53,7 +69,7 @@ Every phase must finish with:
 
 ## Known gaps at project start
 
-- No search endpoints are implemented yet.
+- Asynchronous jobs, bulk NDJSON ingestion, filters, compaction, snapshots, and online generation swaps are not implemented yet.
 - No external benchmark result exists; the current benchmark script measures only the foundation health endpoint.
 - No authentication or multitenancy is planned for the local-first trust boundary.
 - No license has been selected, so the repository is currently marked `UNLICENSED`.

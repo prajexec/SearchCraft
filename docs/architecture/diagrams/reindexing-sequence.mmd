@@ -1,0 +1,15 @@
+sequenceDiagram
+    participant API as Maintenance API
+    participant DB as SQLite source state
+    participant Build as Staging generation
+    participant Validate as Validator
+    participant Manifest as Active manifest
+
+    API->>DB: Record source boundary
+    API->>Build: Read source documents at boundary
+    Build->>Build: Tokenize and build new postings
+    Build->>DB: Replay changes after boundary
+    Build->>Validate: Validate files and statistics
+    Validate-->>Build: Valid generation
+    Build->>Manifest: Atomic active manifest replacement
+    Manifest-->>API: New generation published

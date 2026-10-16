@@ -6,6 +6,13 @@ import { performance } from 'node:perf_hooks';
 import type { Config } from './config';
 import { AppError, errorPayload } from './http/errors';
 import { openapiDocument } from './http/openapi';
+import type { IndexManager } from './indexes/index-manager';
+import {
+  parseSearchDocument,
+  ValidationError,
+  validateDocumentId,
+  validateIndexName,
+} from './indexes/index-config';
 import type { Logger } from './observability/logger';
 import type { Metrics } from './observability/metrics';
 
@@ -14,6 +21,7 @@ export interface AppDependencies {
   readonly database: DatabaseSync;
   readonly logger: Logger;
   readonly metrics: Metrics;
+  readonly indexManager?: IndexManager;
 }
 
 function requestIdFrom(request: IncomingMessage): string {
@@ -67,6 +75,103 @@ function ensureMethod(request: IncomingMessage, expectedMethod: string): void {
   }
 }
 
+function decodePathSegment(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new AppError(400, 'invalid_path_parameter', 'A path parameter is not valid URL encoding');
+  }
+}
+
+function requireIndexManager(dependencies: AppDependencies): IndexManager {
+  if (dependencies.indexManager === undefined) {
+    throw new AppError(503, 'index_service_unavailable', 'The index service is not initialized');
+  }
+  return dependencies.indexManager;
+}
+
+function requireIndexName(value: string): string {
+  const name = decodePathSegment(value);
+  try {
+    validateIndexName(name);
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      throw new AppError(400, 'invalid_index_name', error.message);
+    }
+    throw error;
+  }
+  return name;
+}
+
+function requireDocumentId(value: string): string {
+  const id = decodePathSegment(value);
+  try {
+    validateDocumentId(id);
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      throw new AppError(400, 'invalid_document_id', error.message);
+    }
+    throw error;
+  }
+  return id;
+}
+
+async function readJsonBody(request: IncomingMessage, maximumBytes: number): Promise<unknown> {
+  const contentType = request.headers['content-type'];
+  if (
+    typeof contentType !== 'string' ||
+    !contentType.toLowerCase().startsWith('application/json')
+  ) {
+    throw new AppError(
+      415,
+      'unsupported_media_type',
+      'JSON request bodies must use application/json',
+    );
+  }
+
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  try {
+    for await (const chunk of request) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > maximumBytes) {
+        request.resume();
+        throw new AppError(
+          413,
+          'request_body_too_large',
+          'The request body exceeds the configured limit',
+        );
+      }
+      chunks.push(buffer);
+    }
+  } catch (error) {
+    request.resume();
+    throw error;
+  }
+
+  if (chunks.length === 0) {
+    throw new AppError(400, 'empty_request_body', 'A JSON request body is required');
+  }
+
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+  } catch {
+    throw new AppError(400, 'invalid_json', 'The request body is not valid JSON');
+  }
+}
+
+function parseLimit(value: string | null): number {
+  if (value === null || value === '') {
+    return 20;
+  }
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new AppError(400, 'invalid_limit', 'limit must be an integer between 1 and 100');
+  }
+  return limit;
+}
+
 function routeName(request: IncomingMessage, url: URL): string {
   return `${request.method ?? 'UNKNOWN'} ${url.pathname}`;
 }
@@ -84,9 +189,6 @@ async function handleRequest(
 
   try {
     assertRequestLimits(request, url, dependencies.config);
-    // Foundation routes do not consume request bodies. Drain them so a client
-    // cannot leave an active socket carrying unread data.
-    request.resume();
 
     if (url.pathname === '/health') {
       ensureMethod(request, 'GET');
@@ -136,6 +238,156 @@ async function handleRequest(
       return;
     }
 
+    if (url.pathname === '/v1/indexes') {
+      const indexManager = requireIndexManager(dependencies);
+      if (request.method === 'GET') {
+        sendJson(response, 200, { indexes: indexManager.listIndexes() });
+        return;
+      }
+      if (request.method === 'POST') {
+        const body = await readJsonBody(request, dependencies.config.maxBodyBytes);
+        try {
+          const name =
+            typeof body === 'object' &&
+            body !== null &&
+            'name' in body &&
+            typeof body.name === 'string'
+              ? body.name
+              : '';
+          const rawConfig =
+            typeof body === 'object' && body !== null && 'config' in body ? body.config : undefined;
+          const index = indexManager.createIndex(name, rawConfig);
+          if (index === undefined) {
+            throw new AppError(409, 'index_already_exists', `Index "${name}" already exists`);
+          }
+          sendJson(response, 201, index);
+        } catch (error) {
+          if (error instanceof ValidationError) {
+            throw new AppError(400, 'invalid_index_config', error.message);
+          }
+          throw error;
+        }
+        return;
+      }
+      throw new AppError(
+        405,
+        'method_not_allowed',
+        'Only GET and POST are supported for this route',
+      );
+    }
+
+    const indexMatch = url.pathname.match(/^\/v1\/indexes\/([^/]+)$/);
+    if (indexMatch !== null) {
+      ensureMethod(request, 'GET');
+      const indexManager = requireIndexManager(dependencies);
+      const indexName = requireIndexName(indexMatch[1] ?? '');
+      const index = indexManager.getIndex(indexName);
+      if (index === undefined) {
+        throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+      }
+      sendJson(response, 200, index);
+      return;
+    }
+
+    const searchMatch = url.pathname.match(/^\/v1\/indexes\/([^/]+)\/search$/);
+    if (searchMatch !== null) {
+      ensureMethod(request, 'GET');
+      const indexManager = requireIndexManager(dependencies);
+      const indexName = requireIndexName(searchMatch[1] ?? '');
+      const query = url.searchParams.get('q') ?? '';
+      if (query.trim().length === 0) {
+        throw new AppError(400, 'missing_query', 'The q query parameter is required');
+      }
+      const limit = parseLimit(url.searchParams.get('limit'));
+      const cursor = url.searchParams.get('cursor') ?? undefined;
+      const startedSearchAt = performance.now();
+      let result;
+      try {
+        result = indexManager.search(indexName, query, limit, cursor);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'invalid_cursor') {
+          throw new AppError(400, 'invalid_cursor', 'The cursor is not valid for this search');
+        }
+        throw error;
+      }
+      if (result === undefined) {
+        throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+      }
+      sendJson(response, 200, {
+        hits: result.page.hits,
+        totalHits: result.page.totalHits,
+        totalHitsRelation: 'eq',
+        nextCursor: result.page.nextCursor,
+        indexVersion: result.indexVersion,
+        tookMs: Number((performance.now() - startedSearchAt).toFixed(3)),
+      });
+      return;
+    }
+
+    const documentMatch = url.pathname.match(/^\/v1\/indexes\/([^/]+)\/documents\/([^/]+)$/);
+    if (documentMatch !== null) {
+      const indexManager = requireIndexManager(dependencies);
+      const indexName = requireIndexName(documentMatch[1] ?? '');
+      const documentId = requireDocumentId(documentMatch[2] ?? '');
+      if (request.method === 'GET') {
+        const document = indexManager.getDocument(indexName, documentId);
+        if (document === undefined || document.deleted) {
+          throw new AppError(404, 'document_not_found', `Document "${documentId}" does not exist`);
+        }
+        sendJson(response, 200, {
+          id: document.id,
+          version: document.version,
+          fields: document.fields,
+          searchVisible: true,
+        });
+        return;
+      }
+      if (request.method === 'PUT') {
+        const body = await readJsonBody(request, dependencies.config.maxBodyBytes);
+        try {
+          const document = parseSearchDocument(body, documentId);
+          const stored = indexManager.upsertDocument(indexName, document);
+          if (stored === undefined) {
+            throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+          }
+          const index = indexManager.getIndex(indexName);
+          sendJson(response, 200, {
+            id: stored.id,
+            version: stored.version,
+            fields: stored.fields,
+            searchVisible: true,
+            indexVersion: index?.activeGeneration ?? null,
+          });
+        } catch (error) {
+          if (error instanceof ValidationError) {
+            throw new AppError(400, 'invalid_document', error.message);
+          }
+          throw error;
+        }
+        return;
+      }
+      if (request.method === 'DELETE') {
+        const deleted = indexManager.deleteDocument(indexName, documentId);
+        if (deleted === undefined) {
+          throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+        }
+        const index = indexManager.getIndex(indexName);
+        sendJson(response, 200, {
+          id: deleted.id,
+          version: deleted.version,
+          deleted: true,
+          searchVisible: true,
+          indexVersion: index?.activeGeneration ?? null,
+        });
+        return;
+      }
+      throw new AppError(
+        405,
+        'method_not_allowed',
+        'Only GET, PUT, and DELETE are supported for this route',
+      );
+    }
+
     throw new AppError(404, 'route_not_found', 'The requested route does not exist');
   } catch (error) {
     const statusCode = error instanceof AppError ? error.statusCode : 500;
@@ -150,6 +402,7 @@ async function handleRequest(
       sendJson(response, statusCode, errorPayload(error));
     }
   } finally {
+    request.resume();
     const durationMs = performance.now() - startedAt;
     dependencies.metrics.observe('http_request_duration_ms', durationMs);
     dependencies.logger.info('http_request', {

@@ -49,4 +49,4 @@ curl -i http://127.0.0.1:3000/ready
 curl -s http://127.0.0.1:3000/metrics
 ```
 
-The API specification is available at `http://127.0.0.1:3000/openapi.json`.
+The API specification is available at `http://127.0.0.1:3000/openapi.json`. The checked-in specification is generated from the route contract and verified with `npm run docs:check`.

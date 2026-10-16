@@ -38,7 +38,7 @@ Do not delete runtime data while the service is running. Back up the database an
 
 If migration or SQLite initialization fails, the process exits rather than claiming readiness. Stop the process, preserve the data directory, inspect the error, and run `npm run db:migrate` after correcting the underlying path or permission issue.
 
-Search job recovery, generation recovery, snapshot restore, and corrupt-segment procedures will be added when those features exist.
+The current Phase 1 generation recovery procedure is documented in [RECOVERY.md](RECOVERY.md). Search job recovery, snapshot restore, and multi-segment corruption procedures will be added when those features exist.
 
 ## Resource guidance
 

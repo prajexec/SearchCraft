@@ -1,0 +1,35 @@
+erDiagram
+    INDEXES ||--o{ DOCUMENTS : contains
+    INDEXES ||--o{ INDEXING_JOBS : queues
+    SCHEMA_MIGRATIONS {
+        text id PK
+        text description
+        text applied_at
+    }
+    INDEXES {
+        text name PK
+        text config_json
+        text state
+        integer active_generation
+        text created_at
+        text updated_at
+    }
+    DOCUMENTS {
+        text index_name FK
+        text document_id PK
+        integer version
+        text body_json
+        integer deleted
+        text created_at
+        text updated_at
+    }
+    INDEXING_JOBS {
+        text job_id PK
+        text index_name FK
+        text document_id
+        integer document_version
+        text operation
+        text status
+        integer attempts
+        text available_at
+    }

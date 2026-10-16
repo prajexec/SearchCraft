@@ -1,0 +1,8 @@
+stateDiagram-v2
+    [*] --> pending: Phase 2 enqueue
+    pending --> processing: worker claims job
+    processing --> completed: published generation
+    processing --> pending: retryable failure
+    processing --> failed: terminal failure or retry limit
+    failed --> pending: explicit safe retry
+    completed --> [*]

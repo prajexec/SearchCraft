@@ -2,7 +2,7 @@
 
 ## Scope of this document
 
-This document describes the implemented Phase 0 foundation and the stable boundaries that later search phases will fill in. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
+This document describes the implemented Phase 1 searchable vertical slice and the stable boundaries that later indexing phases will fill in. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
 
 ## Runtime model
 
@@ -14,18 +14,18 @@ flowchart TB
         HTTP[HTTP layer]
         Observability[Logger and metrics]
         SQLiteAccess[SQLite access]
-        Indexing[Planned indexing worker]
-        Query[Planned query engine]
+        Indexing[Phase 2 indexing worker]
+        Query[Query engine and BM25]
         Maintenance[Planned maintenance]
     end
 
     HTTP --> Observability
     HTTP --> SQLiteAccess
     HTTP -. future .-> Indexing
-    HTTP -. future .-> Query
+    HTTP --> Query
     HTTP -. future .-> Maintenance
     Indexing -. future .-> SQLiteAccess
-    Query -. future .-> SQLiteAccess
+    Query --> SQLiteAccess
     Maintenance -. future .-> SQLiteAccess
     SQLiteAccess --> Database[(SQLite file)]
     Indexing -. future .-> Disk[(Index generations and snapshots)]
@@ -39,7 +39,7 @@ flowchart TB
 
 The HTTP layer owns request IDs, route matching, request limits, status codes, JSON serialization, and error envelopes. Search algorithms and SQL statements do not belong in route handlers.
 
-Implemented foundation routes are `/health`, `/ready`, `/metrics`, `/metrics/prometheus`, and `/openapi.json`. Document, job, search, and maintenance routes will be added only with backing functionality.
+Implemented routes include `/health`, `/ready`, `/metrics`, `/metrics/prometheus`, `/openapi.json`, named index management, document CRUD, and BM25 search. Job, bulk, filter, and maintenance routes will be added only with backing functionality.
 
 ### Storage
 
@@ -47,11 +47,11 @@ The storage boundary owns SQLite initialization, explicit migrations, WAL setup,
 
 ### Indexing engine
 
-The planned indexing boundary owns tokenization, field-aware posting construction, segment serialization, manifests, and compaction. Immutable segment files are intended to make readers independent of in-progress writes.
+The current indexing boundary owns Unicode tokenization, field-aware posting construction, term frequencies, positions, BM25 statistics, and versioned JSON snapshot publication. Later phases will add multiple immutable segments and compaction so readers are independent of in-progress writes.
 
 ### Query engine
 
-The planned query boundary owns parsing, term lookup, candidate retrieval, BM25 scoring, filters, stable ordering, and cursor pagination. It should receive an index-generation reader rather than opening HTTP or SQLite connections itself.
+The query boundary owns query tokenization, term lookup, candidate retrieval, BM25 scoring, stable ordering, and cursor pagination. Filters are a later phase. It receives an index-generation reader rather than opening HTTP or SQLite connections itself.
 
 ### Maintenance
 
@@ -78,7 +78,7 @@ sequenceDiagram
     H-->>C: 200 readiness response
 ```
 
-The search ingestion flow will later extend this pattern with a SQLite transaction that stores a source mutation and durable indexing job before returning `202 Accepted`.
+The current Phase 1 document flow persists a source mutation in SQLite, updates the in-process custom index, and atomically publishes a JSON snapshot before returning `200` with `searchVisible: true`. Phase 2 will store a durable indexing job in the same SQLite transaction and return `202 Accepted`.
 
 ## Persistence boundaries
 
@@ -89,7 +89,7 @@ The initial migration creates:
 - `documents` for the latest durable source document version and tombstone state.
 - `indexing_jobs` for durable upsert/delete work and retry metadata.
 
-The search index itself will live below the configured data directory in versioned generation directories. SQLite and filesystem operations cannot share one transaction, so segment staging, validation, atomic rename, manifest publication, and startup recovery are required parts of the later design.
+The current search index lives below the configured data directory in a named index directory with a manifest and versioned JSON snapshots. SQLite and filesystem operations cannot share one transaction. The current implementation uses source-document rebuild recovery; later immutable segments, validation metadata, compaction, and durable job replay will make that boundary more efficient and explicit.
 
 ## Resource model
 

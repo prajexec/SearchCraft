@@ -4,7 +4,7 @@ export const openapiDocument = {
     title: 'SearchCraft API',
     version: '0.1.0',
     description:
-      'A lightweight, local-first search indexing and query service. The foundation currently exposes operational endpoints; search endpoints are added as their underlying functionality becomes available.',
+      'A lightweight, local-first search indexing and query service. The implemented slice provides named indexes, durable source documents, synchronous custom indexing, BM25 search, cursor pagination, and operational endpoints.',
   },
   servers: [{ url: 'http://127.0.0.1:3000' }],
   paths: {
@@ -13,9 +13,7 @@ export const openapiDocument = {
         operationId: 'getHealth',
         summary: 'Report process health',
         responses: {
-          '200': {
-            description: 'The process is running.',
-          },
+          '200': { description: 'The process is running.' },
         },
       },
     },
@@ -53,6 +51,318 @@ export const openapiDocument = {
         summary: 'Return the OpenAPI document',
         responses: {
           '200': { description: 'The current API specification.' },
+        },
+      },
+    },
+    '/v1/indexes': {
+      get: {
+        operationId: 'listIndexes',
+        summary: 'List configured indexes',
+        responses: {
+          '200': {
+            description: 'Configured indexes.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['indexes'],
+                  properties: {
+                    indexes: {
+                      type: 'array',
+                      items: { $ref: '#/components/schemas/IndexMetadata' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      post: {
+        operationId: 'createIndex',
+        summary: 'Create a named search index',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/CreateIndexRequest' },
+              example: {
+                name: 'products',
+                config: {
+                  searchableFields: { title: { boost: 2 }, description: { boost: 1 } },
+                  storedFields: ['title', 'description'],
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '201': {
+            description: 'Index created.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/IndexMetadata' } },
+            },
+          },
+          '400': {
+            description: 'Invalid index name or configuration.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+          '409': { description: 'An index with the name already exists.' },
+        },
+      },
+    },
+    '/v1/indexes/{index}': {
+      parameters: [{ $ref: '#/components/parameters/IndexName' }],
+      get: {
+        operationId: 'getIndex',
+        summary: 'Get index metadata',
+        responses: {
+          '200': {
+            description: 'Index metadata.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/IndexMetadata' } },
+            },
+          },
+          '404': { description: 'Index not found.' },
+        },
+      },
+    },
+    '/v1/indexes/{index}/documents/{id}': {
+      parameters: [
+        { $ref: '#/components/parameters/IndexName' },
+        { $ref: '#/components/parameters/DocumentId' },
+      ],
+      get: {
+        operationId: 'getDocument',
+        summary: 'Read a durable source document',
+        responses: {
+          '200': {
+            description: 'Source document and current version.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/DocumentResponse' } },
+            },
+          },
+          '404': { description: 'Index or document not found.' },
+        },
+      },
+      put: {
+        operationId: 'upsertDocument',
+        summary: 'Upsert and synchronously index a document',
+        description:
+          'The current Phase 1 implementation returns only after the in-process index snapshot is published. Durable asynchronous jobs are introduced in a later phase.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/DocumentRequest' },
+              example: { fields: { title: 'MacBook Air M1', description: 'Lightweight laptop' } },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Document persisted and visible to search.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/DocumentResponse' } },
+            },
+          },
+          '400': {
+            description: 'Invalid document.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+          '404': { description: 'Index not found.' },
+        },
+      },
+      delete: {
+        operationId: 'deleteDocument',
+        summary: 'Delete and synchronously remove a document from search',
+        responses: {
+          '200': {
+            description: 'Document tombstone persisted and indexed.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/DeleteResponse' } },
+            },
+          },
+          '404': { description: 'Index not found.' },
+        },
+      },
+    },
+    '/v1/indexes/{index}/search': {
+      parameters: [{ $ref: '#/components/parameters/IndexName' }],
+      get: {
+        operationId: 'search',
+        summary: 'Search an index with BM25 ranking',
+        parameters: [
+          {
+            name: 'q',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', minLength: 1, maxLength: 1000 },
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          },
+          { name: 'cursor', in: 'query', required: false, schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': {
+            description: 'Ranked search results.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/SearchResponse' } },
+            },
+          },
+          '400': {
+            description: 'Invalid query, limit, or cursor.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+          '404': { description: 'Index not found.' },
+        },
+      },
+    },
+  },
+  components: {
+    parameters: {
+      IndexName: {
+        name: 'index',
+        in: 'path',
+        required: true,
+        schema: { type: 'string', pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$' },
+      },
+      DocumentId: {
+        name: 'id',
+        in: 'path',
+        required: true,
+        schema: { type: 'string', pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$' },
+      },
+    },
+    schemas: {
+      IndexConfig: {
+        type: 'object',
+        required: ['searchableFields'],
+        properties: {
+          searchableFields: {
+            type: 'object',
+            minProperties: 1,
+            additionalProperties: {
+              type: 'object',
+              properties: {
+                boost: { type: 'number', exclusiveMinimum: 0, maximum: 100, default: 1 },
+              },
+            },
+          },
+          storedFields: { type: 'array', items: { type: 'string' } },
+          maxTokenLength: { type: 'integer', minimum: 8, maximum: 1024, default: 128 },
+        },
+      },
+      CreateIndexRequest: {
+        type: 'object',
+        required: ['name', 'config'],
+        properties: {
+          name: { type: 'string', pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$' },
+          config: { $ref: '#/components/schemas/IndexConfig' },
+        },
+      },
+      DocumentRequest: {
+        type: 'object',
+        required: ['fields'],
+        properties: {
+          id: { type: 'string' },
+          fields: {
+            type: 'object',
+            minProperties: 1,
+            additionalProperties: {
+              oneOf: [
+                { type: 'string' },
+                { type: 'number' },
+                { type: 'boolean' },
+                { type: 'array', items: { type: 'string' } },
+              ],
+            },
+          },
+        },
+      },
+      DocumentResponse: {
+        type: 'object',
+        required: ['id', 'version', 'fields', 'searchVisible'],
+        properties: {
+          id: { type: 'string' },
+          version: { type: 'integer' },
+          fields: { type: 'object' },
+          searchVisible: { type: 'boolean' },
+          indexVersion: { type: ['integer', 'null'] },
+        },
+      },
+      DeleteResponse: {
+        type: 'object',
+        required: ['id', 'version', 'deleted', 'searchVisible'],
+        properties: {
+          id: { type: 'string' },
+          version: { type: 'integer' },
+          deleted: { type: 'boolean' },
+          searchVisible: { type: 'boolean' },
+          indexVersion: { type: ['integer', 'null'] },
+        },
+      },
+      IndexMetadata: {
+        type: 'object',
+        required: ['name', 'config', 'state', 'activeGeneration', 'createdAt', 'updatedAt'],
+        properties: {
+          name: { type: 'string' },
+          config: { $ref: '#/components/schemas/IndexConfig' },
+          state: { type: 'string' },
+          activeGeneration: { type: 'integer' },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      SearchResponse: {
+        type: 'object',
+        required: [
+          'hits',
+          'totalHits',
+          'totalHitsRelation',
+          'nextCursor',
+          'indexVersion',
+          'tookMs',
+        ],
+        properties: {
+          hits: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['id', 'score', 'document'],
+              properties: {
+                id: { type: 'string' },
+                score: { type: 'number' },
+                document: { type: 'object' },
+              },
+            },
+          },
+          totalHits: { type: 'integer' },
+          totalHitsRelation: { type: 'string', enum: ['eq'] },
+          nextCursor: { type: ['string', 'null'] },
+          indexVersion: { type: 'integer' },
+          tookMs: { type: 'number' },
+        },
+      },
+      ErrorResponse: {
+        type: 'object',
+        required: ['error'],
+        properties: {
+          error: {
+            type: 'object',
+            required: ['code', 'message'],
+            properties: { code: { type: 'string' }, message: { type: 'string' } },
+          },
         },
       },
     },
