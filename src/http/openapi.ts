@@ -4,7 +4,7 @@ export const openapiDocument = {
     title: 'SearchCraft API',
     version: '0.1.0',
     description:
-      'A lightweight, local-first search indexing and query service. The implemented slice provides named indexes, durable source documents, synchronous custom indexing, BM25 search, cursor pagination, and operational endpoints.',
+      'A lightweight, local-first search indexing and query service. The implemented slice provides named indexes, durable source documents, asynchronous custom indexing, BM25 search, cursor pagination, job inspection, and operational endpoints.',
   },
   servers: [{ url: 'http://127.0.0.1:3000' }],
   paths: {
@@ -149,9 +149,9 @@ export const openapiDocument = {
       },
       put: {
         operationId: 'upsertDocument',
-        summary: 'Upsert and synchronously index a document',
+        summary: 'Upsert a document for asynchronous indexing',
         description:
-          'The current Phase 1 implementation returns only after the in-process index snapshot is published. Durable asynchronous jobs are introduced in a later phase.',
+          'The source document and indexing job are committed together. The production server returns before the worker publishes the index; poll the job or index status for visibility.',
         requestBody: {
           required: true,
           content: {
@@ -162,10 +162,12 @@ export const openapiDocument = {
           },
         },
         responses: {
-          '200': {
-            description: 'Document persisted and visible to search.',
+          '202': {
+            description: 'Document durably accepted for indexing.',
             content: {
-              'application/json': { schema: { $ref: '#/components/schemas/DocumentResponse' } },
+              'application/json': {
+                schema: { $ref: '#/components/schemas/AsyncDocumentResponse' },
+              },
             },
           },
           '400': {
@@ -175,19 +177,21 @@ export const openapiDocument = {
             },
           },
           '404': { description: 'Index not found.' },
+          '429': { description: 'The bounded indexing queue is full.' },
         },
       },
       delete: {
         operationId: 'deleteDocument',
-        summary: 'Delete and synchronously remove a document from search',
+        summary: 'Delete a document asynchronously',
         responses: {
-          '200': {
-            description: 'Document tombstone persisted and indexed.',
+          '202': {
+            description: 'Document tombstone durably accepted for indexing.',
             content: {
-              'application/json': { schema: { $ref: '#/components/schemas/DeleteResponse' } },
+              'application/json': { schema: { $ref: '#/components/schemas/AsyncDeleteResponse' } },
             },
           },
           '404': { description: 'Index not found.' },
+          '429': { description: 'The bounded indexing queue is full.' },
         },
       },
     },
@@ -228,6 +232,91 @@ export const openapiDocument = {
         },
       },
     },
+    '/v1/indexes/{index}/jobs': {
+      parameters: [{ $ref: '#/components/parameters/IndexName' }],
+      get: {
+        operationId: 'listJobs',
+        summary: 'List recent indexing jobs',
+        parameters: [
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Recent jobs.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    jobs: { type: 'array', items: { $ref: '#/components/schemas/IndexingJob' } },
+                  },
+                },
+              },
+            },
+          },
+          '404': { description: 'Index not found.' },
+        },
+      },
+    },
+    '/v1/indexes/{index}/jobs/{jobId}': {
+      parameters: [
+        { $ref: '#/components/parameters/IndexName' },
+        { $ref: '#/components/parameters/JobId' },
+      ],
+      get: {
+        operationId: 'getJob',
+        summary: 'Inspect one indexing job',
+        responses: {
+          '200': {
+            description: 'Indexing job.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/IndexingJob' } },
+            },
+          },
+          '404': { description: 'Job not found.' },
+        },
+      },
+    },
+    '/v1/indexes/{index}/jobs/{jobId}/retry': {
+      parameters: [
+        { $ref: '#/components/parameters/IndexName' },
+        { $ref: '#/components/parameters/JobId' },
+      ],
+      post: {
+        operationId: 'retryJob',
+        summary: 'Retry a terminal failed job',
+        responses: {
+          '202': {
+            description: 'Job returned to the pending queue.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/IndexingJob' } },
+            },
+          },
+          '404': { description: 'Job not found.' },
+        },
+      },
+    },
+    '/v1/indexes/{index}/status': {
+      parameters: [{ $ref: '#/components/parameters/IndexName' }],
+      get: {
+        operationId: 'getIndexStatus',
+        summary: 'Inspect index generation and job health',
+        responses: {
+          '200': {
+            description: 'Index status.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/IndexStatus' } },
+            },
+          },
+          '404': { description: 'Index not found.' },
+        },
+      },
+    },
   },
   components: {
     parameters: {
@@ -242,6 +331,12 @@ export const openapiDocument = {
         in: 'path',
         required: true,
         schema: { type: 'string', pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$' },
+      },
+      JobId: {
+        name: 'jobId',
+        in: 'path',
+        required: true,
+        schema: { type: 'string', format: 'uuid' },
       },
     },
     schemas: {
@@ -301,6 +396,16 @@ export const openapiDocument = {
           indexVersion: { type: ['integer', 'null'] },
         },
       },
+      AsyncDocumentResponse: {
+        type: 'object',
+        required: ['id', 'version', 'jobId', 'searchVisible'],
+        properties: {
+          id: { type: 'string' },
+          version: { type: 'integer' },
+          jobId: { type: 'string', format: 'uuid' },
+          searchVisible: { const: false },
+        },
+      },
       DeleteResponse: {
         type: 'object',
         required: ['id', 'version', 'deleted', 'searchVisible'],
@@ -310,6 +415,17 @@ export const openapiDocument = {
           deleted: { type: 'boolean' },
           searchVisible: { type: 'boolean' },
           indexVersion: { type: ['integer', 'null'] },
+        },
+      },
+      AsyncDeleteResponse: {
+        type: 'object',
+        required: ['id', 'version', 'jobId', 'deleted', 'searchVisible'],
+        properties: {
+          id: { type: 'string' },
+          version: { type: 'integer' },
+          jobId: { type: 'string', format: 'uuid' },
+          deleted: { const: true },
+          searchVisible: { const: false },
         },
       },
       IndexMetadata: {
@@ -352,6 +468,57 @@ export const openapiDocument = {
           nextCursor: { type: ['string', 'null'] },
           indexVersion: { type: 'integer' },
           tookMs: { type: 'number' },
+        },
+      },
+      IndexingJob: {
+        type: 'object',
+        required: [
+          'jobId',
+          'indexName',
+          'documentId',
+          'documentVersion',
+          'operation',
+          'status',
+          'attempts',
+          'availableAt',
+          'claimedAt',
+          'completedAt',
+          'lastError',
+          'createdAt',
+        ],
+        properties: {
+          jobId: { type: 'string', format: 'uuid' },
+          indexName: { type: 'string' },
+          documentId: { type: 'string' },
+          documentVersion: { type: 'integer' },
+          operation: { type: 'string', enum: ['upsert', 'delete'] },
+          status: { type: 'string', enum: ['pending', 'processing', 'completed', 'failed'] },
+          attempts: { type: 'integer' },
+          availableAt: { type: 'string', format: 'date-time' },
+          claimedAt: { type: ['string', 'null'], format: 'date-time' },
+          completedAt: { type: ['string', 'null'], format: 'date-time' },
+          lastError: { type: ['string', 'null'] },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      IndexStatus: {
+        type: 'object',
+        required: ['indexName', 'activeGeneration', 'jobs', 'consistency'],
+        properties: {
+          indexName: { type: 'string' },
+          activeGeneration: { type: 'integer' },
+          consistency: { type: 'string', enum: ['eventual', 'synchronous'] },
+          jobs: {
+            type: 'object',
+            required: ['pending', 'processing', 'completed', 'failed', 'lastCompletedAt'],
+            properties: {
+              pending: { type: 'integer' },
+              processing: { type: 'integer' },
+              completed: { type: 'integer' },
+              failed: { type: 'integer' },
+              lastCompletedAt: { type: ['string', 'null'], format: 'date-time' },
+            },
+          },
         },
       },
       ErrorResponse: {

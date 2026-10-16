@@ -7,13 +7,12 @@ sequenceDiagram
 
     C->>H: PUT /v1/indexes/{index}/documents/{id}
     H->>H: Validate path, content type, body, and fields
-    H->>S: Transactional source-document upsert
-    S-->>H: New document version
-    H->>I: Tokenize and update postings
+    H->>S: Transactional source upsert + pending job
+    S-->>H: New document version + job ID
+    H-->>C: 202 version + job ID
+    Note over C,W: The bounded worker continues after the response.
+    W->>S: Claim job and increment attempt
+    W->>I: Tokenize and update postings
     I->>W: Write generation staging file
     W->>W: Rename generation, then manifest
-    W-->>I: Published index version
-    I-->>H: Search-visible result
-    H-->>C: 200 version + indexVersion
-
-    Note over C,W: Phase 2 will insert a durable job in the SQLite transaction and return 202 before the worker runs.
+    W->>S: Mark job completed

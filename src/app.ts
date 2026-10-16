@@ -15,6 +15,7 @@ import {
 } from './indexes/index-config';
 import type { Logger } from './observability/logger';
 import type { Metrics } from './observability/metrics';
+import { QueueSaturatedError } from './storage/documents';
 
 export interface AppDependencies {
   readonly config: Config;
@@ -22,6 +23,7 @@ export interface AppDependencies {
   readonly logger: Logger;
   readonly metrics: Metrics;
   readonly indexManager?: IndexManager;
+  readonly asynchronousIndexing?: boolean;
 }
 
 function requestIdFrom(request: IncomingMessage): string {
@@ -170,6 +172,14 @@ function parseLimit(value: string | null): number {
     throw new AppError(400, 'invalid_limit', 'limit must be an integer between 1 and 100');
   }
   return limit;
+}
+
+function requireJobId(value: string): string {
+  const jobId = decodePathSegment(value);
+  if (!/^[a-f0-9-]{36}$/.test(jobId)) {
+    throw new AppError(400, 'invalid_job_id', 'Job ID must be a UUID');
+  }
+  return jobId;
 }
 
 function routeName(request: IncomingMessage, url: URL): string {
@@ -338,7 +348,9 @@ async function handleRequest(
           id: document.id,
           version: document.version,
           fields: document.fields,
-          searchVisible: true,
+          searchVisible:
+            dependencies.asynchronousIndexing !== true ||
+            indexManager.isDocumentSearchVisible(indexName, document),
         });
         return;
       }
@@ -346,9 +358,25 @@ async function handleRequest(
         const body = await readJsonBody(request, dependencies.config.maxBodyBytes);
         try {
           const document = parseSearchDocument(body, documentId);
-          const stored = indexManager.upsertDocument(indexName, document);
+          const stored =
+            dependencies.asynchronousIndexing === true
+              ? indexManager.upsertSourceDocument(
+                  indexName,
+                  document,
+                  dependencies.config.maxPendingJobs,
+                )
+              : indexManager.upsertDocument(indexName, document);
           if (stored === undefined) {
             throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+          }
+          if (dependencies.asynchronousIndexing === true) {
+            sendJson(response, 202, {
+              id: stored.id,
+              version: stored.version,
+              jobId: stored.jobId,
+              searchVisible: false,
+            });
+            return;
           }
           const index = indexManager.getIndex(indexName);
           sendJson(response, 200, {
@@ -367,9 +395,26 @@ async function handleRequest(
         return;
       }
       if (request.method === 'DELETE') {
-        const deleted = indexManager.deleteDocument(indexName, documentId);
+        const deleted =
+          dependencies.asynchronousIndexing === true
+            ? indexManager.deleteSourceDocument(
+                indexName,
+                documentId,
+                dependencies.config.maxPendingJobs,
+              )
+            : indexManager.deleteDocument(indexName, documentId);
         if (deleted === undefined) {
           throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+        }
+        if (dependencies.asynchronousIndexing === true) {
+          sendJson(response, 202, {
+            id: deleted.id,
+            version: deleted.version,
+            jobId: deleted.jobId,
+            deleted: true,
+            searchVisible: false,
+          });
+          return;
         }
         const index = indexManager.getIndex(indexName);
         sendJson(response, 200, {
@@ -388,10 +433,89 @@ async function handleRequest(
       );
     }
 
+    const retryJobMatch = url.pathname.match(/^\/v1\/indexes\/([^/]+)\/jobs\/([^/]+)\/retry$/);
+    if (retryJobMatch !== null) {
+      ensureMethod(request, 'POST');
+      const indexManager = requireIndexManager(dependencies);
+      const indexName = requireIndexName(retryJobMatch[1] ?? '');
+      const jobId = requireJobId(retryJobMatch[2] ?? '');
+      const currentJob = indexManager.getJob(indexName, jobId);
+      if (currentJob === undefined) {
+        throw new AppError(404, 'job_not_found', `Job "${jobId}" does not exist`);
+      }
+      if (currentJob.status !== 'failed') {
+        throw new AppError(409, 'job_not_retryable', 'Only failed jobs can be retried');
+      }
+      const job = indexManager.retryJob(indexName, jobId);
+      if (job === undefined) {
+        throw new AppError(404, 'job_not_found', `Job "${jobId}" does not exist`);
+      }
+      sendJson(response, 202, job);
+      return;
+    }
+
+    const jobMatch = url.pathname.match(/^\/v1\/indexes\/([^/]+)\/jobs\/([^/]+)$/);
+    if (jobMatch !== null) {
+      ensureMethod(request, 'GET');
+      const indexManager = requireIndexManager(dependencies);
+      const indexName = requireIndexName(jobMatch[1] ?? '');
+      const jobId = requireJobId(jobMatch[2] ?? '');
+      const job = indexManager.getJob(indexName, jobId);
+      if (job === undefined) {
+        throw new AppError(404, 'job_not_found', `Job "${jobId}" does not exist`);
+      }
+      sendJson(response, 200, job);
+      return;
+    }
+
+    const jobsMatch = url.pathname.match(/^\/v1\/indexes\/([^/]+)\/jobs$/);
+    if (jobsMatch !== null) {
+      ensureMethod(request, 'GET');
+      const indexManager = requireIndexManager(dependencies);
+      const indexName = requireIndexName(jobsMatch[1] ?? '');
+      const jobs = indexManager.listJobs(indexName, parseLimit(url.searchParams.get('limit')));
+      if (jobs === undefined) {
+        throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+      }
+      sendJson(response, 200, { jobs });
+      return;
+    }
+
+    const statusMatch = url.pathname.match(/^\/v1\/indexes\/([^/]+)\/status$/);
+    if (statusMatch !== null) {
+      ensureMethod(request, 'GET');
+      const indexManager = requireIndexManager(dependencies);
+      const indexName = requireIndexName(statusMatch[1] ?? '');
+      const index = indexManager.getIndex(indexName);
+      const jobCounts = indexManager.jobCounts(indexName);
+      if (index === undefined || jobCounts === undefined) {
+        throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+      }
+      sendJson(response, 200, {
+        indexName,
+        activeGeneration: index.activeGeneration,
+        jobs: jobCounts,
+        consistency: dependencies.asynchronousIndexing === true ? 'eventual' : 'synchronous',
+      });
+      return;
+    }
+
     throw new AppError(404, 'route_not_found', 'The requested route does not exist');
   } catch (error) {
-    const statusCode = error instanceof AppError ? error.statusCode : 500;
-    if (!(error instanceof AppError)) {
+    if (error instanceof QueueSaturatedError) {
+      response.setHeader('retry-after', '1');
+    }
+    const statusCode =
+      error instanceof AppError
+        ? error.statusCode
+        : error instanceof QueueSaturatedError
+          ? 429
+          : 500;
+    const safeError =
+      error instanceof QueueSaturatedError
+        ? new AppError(429, 'queue_saturated', 'The indexing queue is at capacity')
+        : error;
+    if (!(safeError instanceof AppError)) {
       dependencies.logger.error('request_failed', {
         error,
         requestId,
@@ -399,7 +523,7 @@ async function handleRequest(
       });
     }
     if (!response.writableEnded) {
-      sendJson(response, statusCode, errorPayload(error));
+      sendJson(response, statusCode, errorPayload(safeError));
     }
   } finally {
     request.resume();

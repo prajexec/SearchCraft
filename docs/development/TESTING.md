@@ -13,7 +13,7 @@ npm run docs:check
 npm run build
 ```
 
-The current tests cover configuration validation, bounded metrics, idempotent SQLite migrations, operational HTTP endpoints, Unicode tokenization, hand-calculated BM25 scoring, posting updates/deletes, index snapshots, API ingestion, cursor pagination, and restart recovery. Durable queue recovery, filters, compaction, snapshots, and generation failure tests will be added with their respective phases.
+The current tests cover configuration validation, bounded metrics, idempotent SQLite migrations, operational HTTP endpoints, Unicode tokenization, hand-calculated BM25 scoring, posting updates/deletes, index snapshots, API ingestion, cursor pagination, transactional jobs, queue saturation, retry transitions, asynchronous completion, stale versions, and restart recovery. Filters, compaction, snapshots, and generation failure tests will be added with their respective phases.
 
 ## Test categories
 

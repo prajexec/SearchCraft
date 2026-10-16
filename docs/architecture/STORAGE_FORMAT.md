@@ -28,7 +28,7 @@ The `001_initial` migration creates:
 - `documents(index_name, document_id, version, body_json, deleted, created_at, updated_at)`
 - `indexing_jobs(job_id, index_name, document_id, document_version, operation, status, attempts, available_at, claimed_at, completed_at, last_error, created_at)`
 
-Phase 1 writes source documents transactionally, but does not enqueue jobs yet. The job table is intentionally present for Phase 2's durable asynchronous worker. A document version increases on every upsert or delete. A delete keeps a tombstone row with `body_json = NULL`.
+Phase 2 writes source documents and their indexing jobs in one SQLite transaction. A document version increases on every upsert or delete. A delete keeps a tombstone row with `body_json = NULL`. The job records the document version so a stale worker attempt cannot overwrite newer source state.
 
 ## Manifest
 
@@ -46,7 +46,7 @@ The active manifest is a small JSON object:
 
 The manifest is written to a temporary sibling file and published with a filesystem rename after the generation file has been written and renamed. On startup, an invalid manifest or segment causes a source-document rebuild instead of silently serving a partially parsed index.
 
-## Phase 1 snapshot
+## Current snapshot
 
 The JSON snapshot contains:
 
@@ -57,16 +57,18 @@ The JSON snapshot contains:
 - Sorted `(field, term)` entries.
 - Sorted postings with document ID, document version, term frequency, and positions.
 
-JSON is intentionally not described as a compressed or scalable format. It is inspectable and deterministic enough for the first vertical slice. Phase 4 can introduce multiple immutable segments, checksums, block encoding, and bounded readers without changing the logical posting contract.
+JSON is intentionally not described as a compressed or scalable format. It is inspectable and deterministic enough for the current small vertical slice. Phase 4 can introduce multiple immutable segments, checksums, block encoding, and bounded readers without changing the logical posting contract.
 
 ## Filesystem failure window
 
-SQLite and the filesystem do not share an atomic transaction. The current order is:
+SQLite and the filesystem do not share an atomic transaction. The asynchronous worker's current order is:
 
-1. Commit the source-document mutation to SQLite.
-2. Update the in-process index.
-3. Write and rename the next generation file.
-4. Write and rename the active manifest.
-5. Update `indexes.active_generation` in SQLite.
+1. Commit the source-document mutation and pending job to SQLite.
+2. Claim the job and increment its attempt count.
+3. Update the in-process index.
+4. Write and rename the next generation file.
+5. Write and rename the active manifest.
+6. Update `indexes.active_generation` in SQLite.
+7. Mark the job completed.
 
-If steps 2–5 fail after step 1, the durable source remains authoritative and startup can rebuild from active source documents. If a future asynchronous worker is introduced, job completion must occur only after the required generation state is durably published.
+If steps 3–6 fail after step 1, the durable source and pending/processing job remain authoritative. A worker restart returns orphaned processing jobs to `pending`; startup also compares source versions with the active snapshot and rebuilds when necessary. Job completion occurs only after the required generation state is durably published.

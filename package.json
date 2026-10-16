@@ -20,7 +20,7 @@
     "format:check": "prettier --check .",
     "db:migrate": "npm run build && node dist/src/storage/migrate-cli.js",
     "benchmark": "npm run build && node dist/src/scripts/benchmark.js",
-    "docs:generate": "npm run build && node dist/src/scripts/export-openapi.js",
+    "docs:generate": "npm run build && node dist/src/scripts/export-openapi.js && prettier --write docs/api/openapi.json",
     "docs:check": "npm run build && node scripts/check-docs.mjs && node dist/src/scripts/check-openapi.js"
   },
   "devDependencies": {

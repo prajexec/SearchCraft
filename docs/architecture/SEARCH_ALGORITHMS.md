@@ -20,7 +20,7 @@ The Phase 1 in-process index stores:
 
 Each indexed document also stores its configured field lengths and the stored source fields returned in a hit. Updating a document removes its existing postings before adding postings for the new version. Deleting a document removes it from the active in-process index and persists a SQLite tombstone.
 
-The first persisted representation is a complete, inspectable JSON snapshot. It is versioned with `magic: SEARCHCRAFT_SEGMENT` and `formatVersion: 1`. This is intentionally easy to inspect while the dataset is small. It rewrites the full snapshot after each synchronous mutation, so it is not the final high-throughput segment architecture.
+The first persisted representation is a complete, inspectable JSON snapshot. It is versioned with `magic: SEARCHCRAFT_SEGMENT` and `formatVersion: 1`. This is intentionally easy to inspect while the dataset is small. The worker rewrites the full snapshot after each completed indexing job, so it is not the final high-throughput segment architecture.
 
 ## BM25
 
@@ -56,6 +56,6 @@ The cursor is not a promise that results remain stable after an update. Clients 
 
 - All candidates are scored in memory after posting lookup.
 - Posting lists and term dictionaries are not compressed.
-- The complete JSON snapshot is rewritten for every synchronous mutation.
+- The complete JSON snapshot is rewritten for every completed indexing job.
 - Phrase queries, filters, range scoring, synonyms, stemming, and vector search are not implemented.
 - A future multi-segment reader and compactor must preserve the version and tombstone invariants tested here.

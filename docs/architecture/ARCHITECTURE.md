@@ -2,7 +2,7 @@
 
 ## Scope of this document
 
-This document describes the implemented Phase 1 searchable vertical slice and the stable boundaries that later indexing phases will fill in. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
+This document describes the implemented Phase 2 asynchronous indexing service and the stable boundaries that later query and maintenance phases will fill in. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
 
 ## Runtime model
 
@@ -14,14 +14,14 @@ flowchart TB
         HTTP[HTTP layer]
         Observability[Logger and metrics]
         SQLiteAccess[SQLite access]
-        Indexing[Phase 2 indexing worker]
+        Indexing[Bounded indexing worker]
         Query[Query engine and BM25]
         Maintenance[Planned maintenance]
     end
 
     HTTP --> Observability
     HTTP --> SQLiteAccess
-    HTTP -. future .-> Indexing
+    HTTP --> Indexing
     HTTP --> Query
     HTTP -. future .-> Maintenance
     Indexing -. future .-> SQLiteAccess
@@ -78,7 +78,7 @@ sequenceDiagram
     H-->>C: 200 readiness response
 ```
 
-The current Phase 1 document flow persists a source mutation in SQLite, updates the in-process custom index, and atomically publishes a JSON snapshot before returning `200` with `searchVisible: true`. Phase 2 will store a durable indexing job in the same SQLite transaction and return `202 Accepted`.
+The production document flow validates the request, commits the source mutation and indexing job in one SQLite transaction, and returns `202 Accepted`. The bounded worker claims the job, checks the latest document version, updates the custom index, publishes a snapshot, and marks the job complete. Search visibility is therefore eventually consistent and observable through job/status endpoints.
 
 ## Persistence boundaries
 
@@ -93,13 +93,15 @@ The current search index lives below the configured data directory in a named in
 
 ## Resource model
 
-The foundation has no background worker and stores only bounded metric samples. The later system will use:
+The service uses:
 
 - One indexing worker by default.
 - Bounded queue claims and batches.
 - Maximum request, query, token, and result limits.
 - Immutable segments instead of a repeatedly rewritten monolithic index.
 - Explicit cleanup for staging directories, retired generations, and old job history.
+- A configurable maximum outstanding job count per index.
+- Processing leases and startup recovery for jobs left in `processing`.
 
 No capacity or latency claim is made until the benchmark harness measures a defined workload.
 
@@ -111,7 +113,7 @@ No capacity or latency claim is made until the benchmark harness measures a defi
 - Invalid request limits produce a safe JSON error without stack traces.
 - The server handles SIGINT and SIGTERM by stopping new connections, closing the HTTP server, and closing SQLite.
 
-Later failure-mode documentation will cover job recovery, stale versions, corrupt segments, interrupted compaction, and generation swaps.
+Job recovery, stale-version handling, queue saturation, and retry behavior are documented in [FAILURE_MODES.md](FAILURE_MODES.md). Corrupt segments, interrupted compaction, and generation swaps remain later maintenance work.
 
 ## Technology tradeoffs
 

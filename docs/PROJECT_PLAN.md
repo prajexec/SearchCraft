@@ -14,17 +14,17 @@ SearchCraft is a lightweight, self-contained search indexing and query service. 
 
 ## Phase status
 
-| Phase | Scope                                                                        | Status      |
-| ----- | ---------------------------------------------------------------------------- | ----------- |
-| 0     | Project foundation, operational endpoints, SQLite migrations, docs, diagrams | Complete    |
-| 1     | Searchable vertical slice, tokenization, inverted index, BM25                | In progress |
-| 2     | Durable asynchronous indexing and recovery                                   | Planned     |
-| 3     | Filters, field boosts, and cursor pagination                                 | Planned     |
-| 4     | Versioned immutable segments and compaction                                  | Planned     |
-| 5     | Streaming bulk ingestion and operational metrics                             | Planned     |
-| 6     | Generations, reindexing, snapshots, and online swaps                         | Planned     |
-| 7     | Reproducible benchmarks, CI, and engineering polish                          | Planned     |
-| 8     | Optional advanced features selected from measured needs                      | Planned     |
+| Phase | Scope                                                                        | Status   |
+| ----- | ---------------------------------------------------------------------------- | -------- |
+| 0     | Project foundation, operational endpoints, SQLite migrations, docs, diagrams | Complete |
+| 1     | Searchable vertical slice, tokenization, inverted index, BM25                | Complete |
+| 2     | Durable asynchronous indexing and recovery                                   | Complete |
+| 3     | Filters, field boosts, and cursor pagination                                 | Planned  |
+| 4     | Versioned immutable segments and compaction                                  | Planned  |
+| 5     | Streaming bulk ingestion and operational metrics                             | Planned  |
+| 6     | Generations, reindexing, snapshots, and online swaps                         | Planned  |
+| 7     | Reproducible benchmarks, CI, and engineering polish                          | Planned  |
+| 8     | Optional advanced features selected from measured needs                      | Planned  |
 
 ## Phase 0 acceptance criteria
 
@@ -50,11 +50,25 @@ Phase 0 was committed as `a257cea` (`chore: initialize lightweight TypeScript pr
 - The active index can be loaded after a process restart.
 - Unit, API, and restart integration tests protect these behaviors.
 
-Phase 1 is intentionally synchronous. A successful document mutation is durably stored in SQLite and is returned only after the in-process index snapshot is published. Phase 2 will move this work to a durable asynchronous queue with explicit eventual-consistency semantics.
+Phase 1 was committed as `a6aa0f5` (`feat: add searchable vertical slice`).
+
+## Phase 2 acceptance criteria
+
+- Document mutations and their indexing jobs commit atomically in SQLite.
+- Production writes return `202 Accepted` with a job ID and explicit eventual-consistency semantics.
+- One bounded worker claims jobs, publishes index state, and marks completion only afterward.
+- Processing jobs are recoverable after worker or process restart.
+- A stale job cannot overwrite a newer document version.
+- Retryable failures return to `pending` with bounded exponential delay; terminal failures become inspectable `failed` jobs.
+- Queue saturation returns `429` with `Retry-After` without silently dropping a durable operation.
+- Job inspection, retry, and index status endpoints expose operational state.
+- Tests cover transaction coupling, queue limits, normal completion, restart recovery, stale handling, and retry transitions.
+
+Phase 2 acceptance criteria are verified by the asynchronous API, worker, transaction, recovery, and job-state tests.
 
 ## Next implementation slice
 
-The next slice is Phase 2: persist indexing jobs in the existing SQLite schema, add a bounded worker loop, expose job and index status, recover claimed work after restart, and make the API return `202 Accepted` with observable eventual consistency.
+The next slice is Phase 3: add typed exact-match and numeric range filters, field boost tuning, query safeguards, and cursor pagination semantics for the asynchronous production API.
 
 ## Required evidence for each phase
 
@@ -69,7 +83,7 @@ Every phase must finish with:
 
 ## Known gaps at project start
 
-- Asynchronous jobs, bulk NDJSON ingestion, filters, compaction, snapshots, and online generation swaps are not implemented yet.
+- Bulk NDJSON ingestion, filters, compaction, snapshots, and online generation swaps are not implemented yet.
 - No external benchmark result exists; the current benchmark script measures only the foundation health endpoint.
 - No authentication or multitenancy is planned for the local-first trust boundary.
 - No license has been selected, so the repository is currently marked `UNLICENSED`.

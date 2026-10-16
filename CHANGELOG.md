@@ -17,8 +17,11 @@ All notable changes to SearchCraft are recorded here.
 - Custom inverted index snapshots with term statistics and field lengths.
 - Custom BM25 scoring, field boosts, deterministic ordering, and cursor pagination.
 - Restart recovery from the active index manifest.
+- Durable SQLite indexing jobs with bounded queue admission.
+- One indexing worker with processing leases, orphan recovery, retries, and stale-version protection.
+- Job inspection, retry, and index status endpoints.
 
 ### Not yet implemented
 
-- Asynchronous indexing worker, immutable segments, compaction, reindexing, and snapshots.
+- Bulk NDJSON ingestion, filters, immutable multi-segment compaction, reindexing, and snapshots.
 - Bulk NDJSON ingestion, filters, and operational job inspection.

@@ -19,6 +19,7 @@ import {
 } from './index-config';
 import { DocumentRepository, type StoredSourceDocument } from '../storage/documents';
 import { IndexRepository } from '../storage/indexes';
+import { JobRepository, type IndexingJob, type JobCounts } from '../storage/jobs';
 
 interface RuntimeIndex {
   readonly metadata: IndexMetadata;
@@ -36,6 +37,7 @@ export class IndexManager {
   private readonly indexes = new Map<string, RuntimeIndex>();
   private readonly indexRepository: IndexRepository;
   private readonly documentRepository: DocumentRepository;
+  private readonly jobRepository: JobRepository;
 
   public constructor(
     private readonly database: DatabaseSync,
@@ -43,6 +45,7 @@ export class IndexManager {
   ) {
     this.indexRepository = new IndexRepository(database);
     this.documentRepository = new DocumentRepository(database);
+    this.jobRepository = new JobRepository(database);
   }
 
   public load(): void {
@@ -87,6 +90,10 @@ export class IndexManager {
     return this.documentRepository.get(indexName, documentId);
   }
 
+  public isDocumentSearchVisible(indexName: string, document: StoredSourceDocument): boolean {
+    return this.indexes.get(indexName)?.index.documentVersion(document.id) === document.version;
+  }
+
   public upsertDocument(
     indexName: string,
     document: SearchDocument,
@@ -106,6 +113,20 @@ export class IndexManager {
     return stored;
   }
 
+  public upsertSourceDocument(
+    indexName: string,
+    document: SearchDocument,
+    maxPendingJobs: number,
+  ): StoredSourceDocument | undefined {
+    if (!this.indexes.has(indexName)) {
+      return undefined;
+    }
+    return this.documentRepository.upsert(indexName, document, {
+      enqueueJob: true,
+      maxPendingJobs,
+    });
+  }
+
   public deleteDocument(indexName: string, documentId: string): StoredSourceDocument | undefined {
     const runtime = this.indexes.get(indexName);
     if (runtime === undefined) {
@@ -121,6 +142,68 @@ export class IndexManager {
       throw error;
     }
     return stored;
+  }
+
+  public deleteSourceDocument(
+    indexName: string,
+    documentId: string,
+    maxPendingJobs: number,
+  ): StoredSourceDocument | undefined {
+    if (!this.indexes.has(indexName)) {
+      return undefined;
+    }
+    validateDocumentId(documentId);
+    return this.documentRepository.delete(indexName, documentId, {
+      enqueueJob: true,
+      maxPendingJobs,
+    });
+  }
+
+  public getJob(indexName: string, jobId: string): IndexingJob | undefined {
+    if (!this.indexes.has(indexName)) {
+      return undefined;
+    }
+    return this.jobRepository.get(indexName, jobId);
+  }
+
+  public listJobs(indexName: string, limit: number): readonly IndexingJob[] | undefined {
+    if (!this.indexes.has(indexName)) {
+      return undefined;
+    }
+    return this.jobRepository.list(indexName, limit);
+  }
+
+  public retryJob(indexName: string, jobId: string): IndexingJob | undefined {
+    if (!this.indexes.has(indexName)) {
+      return undefined;
+    }
+    return this.jobRepository.retry(indexName, jobId);
+  }
+
+  public jobCounts(indexName: string): JobCounts | undefined {
+    if (!this.indexes.has(indexName)) {
+      return undefined;
+    }
+    return this.jobRepository.count(indexName);
+  }
+
+  public applyIndexedDocument(indexName: string, document: StoredSourceDocument): boolean {
+    const runtime = this.indexes.get(indexName);
+    if (runtime === undefined) {
+      return false;
+    }
+    if (document.deleted) {
+      runtime.index.remove(document.id);
+    } else {
+      runtime.index.upsert(document, document.version);
+    }
+    try {
+      this.persist(runtime);
+    } catch (error) {
+      runtime.index = this.buildIndexFromSource(runtime.metadata);
+      throw error;
+    }
+    return true;
   }
 
   public search(
@@ -200,6 +283,9 @@ export class IndexManager {
     const snapshotVersions = new Map(
       snapshot.documents.map((document) => [document.id, document.version]),
     );
+    if (snapshotVersions.size !== snapshot.documents.length) {
+      return false;
+    }
     return sourceDocuments.every(
       (document) => snapshotVersions.get(document.id) === document.version,
     );

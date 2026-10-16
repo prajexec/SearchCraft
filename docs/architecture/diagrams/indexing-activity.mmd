@@ -1,14 +1,17 @@
 flowchart TD
     Start([Document mutation]) --> Validate{Valid request?}
     Validate -- No --> Reject[Return validation error]
-    Validate -- Yes --> Persist[Persist source document]
-    Persist --> Update[Update in-process postings]
+    Validate -- Yes --> Persist[Persist source document + job]
+    Persist --> Queue[Pending durable queue]
+    Queue --> Claim[Claim with processing lease]
+    Claim --> Update[Update in-process postings]
     Update --> Stage[Write generation staging file]
     Stage --> Publish[Rename generation and manifest]
-    Publish --> Complete[Return searchVisible true]
+    Publish --> Complete[Mark job completed]
     Stage --> Failure{Filesystem failure?}
-    Failure -- Yes --> Durable[Source document remains durable]
-    Durable --> Recovery[Startup rebuild from SQLite]
+    Failure -- Yes --> Retry{Attempts remaining?}
+    Retry -- Yes --> Queue
+    Retry -- No --> Failed[Mark terminal failed]
     Failure -- No --> Publish
-
-    Async[Phase 2 durable job] -. future bounded worker .-> Start
+    Crash[Worker restart] --> Recover[Return processing jobs to pending]
+    Recover --> Queue

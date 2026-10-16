@@ -159,6 +159,10 @@ export class InvertedIndex {
     this.documents.delete(documentId);
   }
 
+  public documentVersion(documentId: string): number | undefined {
+    return this.documents.get(documentId)?.version;
+  }
+
   public search(query: string, limit: number, cursor: SearchCursor | undefined): SearchPage {
     const queryTerms = [
       ...new Set(tokenize(query, this.config.maxTokenLength).map((token) => token.term)),

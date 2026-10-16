@@ -10,6 +10,11 @@ export interface Config {
   readonly maxBodyBytes: number;
   readonly maxQueryLength: number;
   readonly maxBulkBatchSize: number;
+  readonly maxPendingJobs: number;
+  readonly workerPollIntervalMs: number;
+  readonly jobLeaseMs: number;
+  readonly maxJobAttempts: number;
+  readonly maxJobHistory: number;
   readonly logLevel: LogLevel;
 }
 
@@ -20,6 +25,11 @@ const DEFAULTS = {
   maxBodyBytes: 1_048_576,
   maxQueryLength: 1_000,
   maxBulkBatchSize: 1_000,
+  maxPendingJobs: 10_000,
+  workerPollIntervalMs: 50,
+  jobLeaseMs: 30_000,
+  maxJobAttempts: 5,
+  maxJobHistory: 10_000,
   logLevel: 'info' as LogLevel,
 };
 
@@ -78,6 +88,31 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config
       'SEARCHCRAFT_MAX_BULK_BATCH_SIZE',
       environment.SEARCHCRAFT_MAX_BULK_BATCH_SIZE,
       DEFAULTS.maxBulkBatchSize,
+    ),
+    maxPendingJobs: parsePositiveInteger(
+      'SEARCHCRAFT_MAX_PENDING_JOBS',
+      environment.SEARCHCRAFT_MAX_PENDING_JOBS,
+      DEFAULTS.maxPendingJobs,
+    ),
+    workerPollIntervalMs: parsePositiveInteger(
+      'SEARCHCRAFT_WORKER_POLL_INTERVAL_MS',
+      environment.SEARCHCRAFT_WORKER_POLL_INTERVAL_MS,
+      DEFAULTS.workerPollIntervalMs,
+    ),
+    jobLeaseMs: parsePositiveInteger(
+      'SEARCHCRAFT_JOB_LEASE_MS',
+      environment.SEARCHCRAFT_JOB_LEASE_MS,
+      DEFAULTS.jobLeaseMs,
+    ),
+    maxJobAttempts: parsePositiveInteger(
+      'SEARCHCRAFT_MAX_JOB_ATTEMPTS',
+      environment.SEARCHCRAFT_MAX_JOB_ATTEMPTS,
+      DEFAULTS.maxJobAttempts,
+    ),
+    maxJobHistory: parsePositiveInteger(
+      'SEARCHCRAFT_MAX_JOB_HISTORY',
+      environment.SEARCHCRAFT_MAX_JOB_HISTORY,
+      DEFAULTS.maxJobHistory,
     ),
     logLevel: parseLogLevel(environment.SEARCHCRAFT_LOG_LEVEL),
   };
