@@ -1,0 +1,14 @@
+sequenceDiagram
+    participant Client
+    participant HTTP as HTTP server
+    participant Metrics as Metrics/logger
+    participant SQLite
+
+    Client->>HTTP: GET /ready
+    HTTP->>Metrics: Generate request ID and start timer
+    HTTP->>SQLite: SELECT 1
+    SQLite-->>HTTP: Successful probe
+    HTTP->>Metrics: Record counter and duration
+    HTTP-->>Client: 200 {status: ready}
+
+    Note over Client,SQLite: Document ingestion and search are added only with real backing functionality.

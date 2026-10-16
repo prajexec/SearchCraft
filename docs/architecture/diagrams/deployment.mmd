@@ -1,0 +1,14 @@
+flowchart TB
+    subgraph Mac[Apple Silicon MacBook Air]
+        Node[Node.js 22 process]
+        Data[(Configurable local data directory)]
+        DB[(searchcraft.sqlite + WAL)]
+        Generations[(Index generations<br/>planned)]
+        Snapshots[(Snapshots<br/>planned)]
+    end
+
+    Client[Local application or curl] -->|127.0.0.1:3000| Node
+    Node --> DB
+    Node --> Data
+    Data --> Generations
+    Data --> Snapshots

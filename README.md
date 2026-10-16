@@ -1,0 +1,175 @@
+# SearchCraft
+
+SearchCraft is a lightweight, self-contained search indexing and query service written in strict TypeScript. It is designed as a portfolio-grade backend system that makes search-engine mechanics and operational tradeoffs visible rather than delegating them to OpenSearch or Elasticsearch.
+
+> **Current status:** Phase 0 foundation. The service currently exposes operational endpoints, SQLite migrations, structured logs, basic metrics, and OpenAPI metadata. The document ingestion and keyword search pipeline is the next implementation slice and is intentionally not claimed as complete yet.
+
+## Why this project exists
+
+SearchCraft is built around the engineering questions behind a real search service:
+
+- How are text fields tokenized deterministically?
+- How do terms map to posting lists?
+- How does BM25 rank candidates using term statistics and field boosts?
+- How can document updates and deletes remain correct while indexing is asynchronous?
+- How can immutable segments be merged and published without exposing partial state?
+- How do durable jobs recover after a process or filesystem failure?
+- How can resource consumption remain predictable on a small development machine?
+
+The implementation will favor correctness, explicit consistency semantics, bounded memory, measurable behavior, and recoverable operations over premature distributed complexity.
+
+## Current feature status
+
+| Capability                                              | Status                               |
+| ------------------------------------------------------- | ------------------------------------ |
+| Native Node.js HTTP server                              | Implemented                          |
+| Strict TypeScript project and reproducible npm scripts  | Implemented                          |
+| SQLite initialization and explicit migration tracking   | Implemented                          |
+| Health and readiness endpoints                          | Implemented                          |
+| JSON and Prometheus-compatible process metrics          | Implemented                          |
+| OpenAPI endpoint and checked-in specification           | Implemented for foundation endpoints |
+| Structured JSON logging and request IDs                 | Implemented                          |
+| Named indexes and document ingestion                    | Planned for Phase 1                  |
+| Custom inverted index and tokenizer                     | Planned for Phase 1                  |
+| BM25 ranking                                            | Planned for Phase 1                  |
+| Durable asynchronous indexing worker                    | Planned for Phase 2                  |
+| Filters and cursor pagination                           | Planned for Phase 3                  |
+| Immutable segments and compaction                       | Planned for Phase 4                  |
+| Bulk ingestion, reindexing, snapshots, and online swaps | Planned for later phases             |
+
+## Architecture
+
+The initial runtime is one Node.js process with a local SQLite database and configurable disk-backed runtime data. The final modular monolith will keep HTTP handling, durable source state, indexing, querying, maintenance, and observability separate without introducing microservices.
+
+```mermaid
+flowchart LR
+    Client[Application client] --> HTTP[Node.js HTTP API]
+    HTTP --> Health[Health/readiness/metrics]
+    HTTP -. future .-> Documents[Document and search routes]
+    HTTP --> SQLite[(SQLite metadata and durable jobs)]
+    Documents -. future .-> Worker[Bounded indexing worker]
+    Worker -. future .-> Segments[(Immutable index generations)]
+    HTTP -. future .-> Query[Query engine and BM25]
+    Query -. future .-> Segments
+```
+
+More diagrams and architecture decisions are in [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md), [`docs/architecture/diagrams/`](docs/architecture/diagrams/), and [`docs/decisions/`](docs/decisions/).
+
+## Hardware-conscious design
+
+The baseline deliberately avoids OpenSearch, PostgreSQL servers, Docker dependencies, Redis, and local embedding models. On an 8 GB M1 MacBook Air, this means the development process is primarily one Node.js process plus files on disk.
+
+Resource safeguards are part of the design:
+
+- One indexing worker initially.
+- Configurable request-body, query, and bulk limits.
+- Bounded metric samples rather than unbounded latency history.
+- SQLite WAL mode for local durable metadata.
+- Immutable segments and staged publication rather than rewriting one monolithic index file.
+- Runtime data, snapshots, and generated benchmark data excluded from Git.
+- Benchmark profiles will be selected from measurements rather than assumed capacity.
+
+The first custom index will be intended for small and medium local datasets. It is not yet claiming OpenSearch-scale throughput or storage efficiency.
+
+## Prerequisites
+
+- Node.js 22.x
+- npm 10.x
+- Git
+
+The current implementation uses Node's built-in `node:sqlite`. Verify it with:
+
+```bash
+node --no-warnings -e "const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(':memory:'); db.exec('select 1'); console.log('node:sqlite available'); db.close();"
+```
+
+No Docker, PostgreSQL server, or external service is required for local development.
+
+## Setup
+
+```bash
+npm install
+npm run db:migrate
+```
+
+The default runtime directory is `./data`. It contains the SQLite database and, as later phases are implemented, index generations, staging data, and snapshots. Configure paths and safeguards with environment variables; see [`.env.example`](.env.example).
+
+## Run the foundation
+
+```bash
+npm run build
+npm start
+```
+
+For a rebuild-then-watch development loop:
+
+```bash
+npm run dev
+```
+
+The server listens on `127.0.0.1:3000` by default.
+
+Try the implemented endpoints:
+
+```bash
+curl -i http://127.0.0.1:3000/health
+curl -i http://127.0.0.1:3000/ready
+curl -s http://127.0.0.1:3000/metrics | jq
+curl -s http://127.0.0.1:3000/metrics/prometheus
+curl -s http://127.0.0.1:3000/openapi.json | jq
+```
+
+The search and document examples will be added when those routes are backed by real implementations.
+
+## Quality checks
+
+```bash
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run docs:check
+npm run build
+```
+
+The current benchmark is an actual foundation smoke benchmark for the health endpoint. It reports p50, p95, and p99 latency for a configurable number of local requests:
+
+```bash
+npm run benchmark
+SEARCHCRAFT_BENCHMARK_ITERATIONS=1000 npm run benchmark
+```
+
+It must not be interpreted as search performance. A deterministic indexing and query benchmark will be introduced with the search engine phases.
+
+## Persistence and consistency direction
+
+The final ingestion flow will persist a source-document mutation and its indexing job in one SQLite transaction, then let a bounded worker publish index segments asynchronously. A successful document write will therefore mean **durably accepted**, not immediately searchable. The API will expose job status and index status so callers can observe eventual consistency.
+
+SQLite and filesystem writes cannot share one atomic transaction. The planned segment writer will use staging files, validation metadata, atomic renames where supported, and startup recovery. A stale job must never overwrite a newer document version.
+
+## Documentation map
+
+- [Project plan](docs/PROJECT_PLAN.md)
+- [Architecture overview](docs/architecture/ARCHITECTURE.md)
+- [Development setup](docs/development/SETUP.md)
+- [Testing](docs/development/TESTING.md)
+- [Lightweight architecture ADR](docs/decisions/ADR-0001-lightweight-architecture.md)
+- [OpenAPI 3.1 document](docs/api/openapi.json)
+- [Operational runbook](docs/operations/RUNBOOK.md)
+- [Mermaid diagrams](docs/architecture/diagrams/)
+
+## Known limitations
+
+- Search, indexing, filters, pagination, and snapshots are not implemented in the current foundation.
+- The current metrics registry is process-local and intentionally lightweight.
+- The current benchmark does not represent search workload behavior.
+- There is no authentication, multitenancy, or distributed rate limiting.
+- The project is marked `UNLICENSED` until a license decision is made.
+
+## Roadmap
+
+The implementation roadmap and acceptance criteria are maintained in [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md). Each phase is expected to finish with working code, tests, documentation, diagrams, checks, and a focused Git commit.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow and commit expectations. Runtime state must not be committed. Architectural changes should include an ADR and synchronized documentation.

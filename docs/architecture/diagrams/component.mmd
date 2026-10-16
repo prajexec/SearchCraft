@@ -1,0 +1,30 @@
+flowchart TB
+    HTTP[HTTP API layer]
+    Config[Configuration]
+    Logger[Structured logger]
+    Metrics[Metrics registry]
+    Storage[SQLite storage boundary]
+    Migrations[Migration runner]
+    IndexManager[Index management<br/>planned]
+    Queue[Durable job queue<br/>planned]
+    Worker[Indexing worker<br/>planned]
+    Engine[Indexing engine<br/>planned]
+    Query[Query engine<br/>planned]
+    Maintenance[Maintenance<br/>planned]
+    DB[(SQLite)]
+    Disk[(Index files)]
+
+    HTTP --> Config
+    HTTP --> Logger
+    HTTP --> Metrics
+    HTTP --> Storage
+    Storage --> Migrations
+    Storage --> DB
+    HTTP -. future .-> IndexManager
+    IndexManager -. future .-> Queue
+    Queue -. future .-> Worker
+    Worker -. future .-> Engine
+    Engine -. future .-> Disk
+    Query -. future .-> Disk
+    Maintenance -. future .-> Disk
+    Maintenance -. future .-> Storage

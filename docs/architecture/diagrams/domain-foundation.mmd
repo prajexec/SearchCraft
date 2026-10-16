@@ -1,0 +1,28 @@
+classDiagram
+    class IndexMetadata {
+        +string name
+        +string configJson
+        +string state
+        +number activeGeneration
+    }
+
+    class SourceDocument {
+        +string indexName
+        +string documentId
+        +number version
+        +string bodyJson
+        +boolean deleted
+    }
+
+    class IndexingJob {
+        +string jobId
+        +string operation
+        +number documentVersion
+        +string status
+        +number attempts
+        +string availableAt
+    }
+
+    IndexMetadata "1" --> "0..*" SourceDocument : contains
+    IndexMetadata "1" --> "0..*" IndexingJob : queues
+    SourceDocument "1" --> "0..*" IndexingJob : produces

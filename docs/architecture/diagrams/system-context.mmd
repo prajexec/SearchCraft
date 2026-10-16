@@ -1,0 +1,11 @@
+flowchart LR
+    Client[Application client]
+    Operator[Local operator]
+    SearchCraft[SearchCraft HTTP service]
+    SQLite[(SQLite metadata and jobs)]
+    IndexFiles[(Disk-backed index generations<br/>planned)]
+
+    Client -->|HTTP API| SearchCraft
+    Operator -->|health, readiness, metrics| SearchCraft
+    SearchCraft --> SQLite
+    SearchCraft -. future indexing and query data .-> IndexFiles
