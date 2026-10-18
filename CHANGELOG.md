@@ -22,7 +22,11 @@ All notable changes to SearchCraft are recorded here.
 - Job inspection, retry, and index status endpoints.
 - Configured exact-match and numeric-range filters with safe query parsing.
 - Query term-count and punctuation-only safeguards.
+- Versioned immutable segments with atomic manifest append and restart recovery.
+- Cross-segment document-version resolution, tombstones, and global BM25 statistics.
+- Checksummed segment and manifest validation with safe relative-path enforcement.
+- Threshold-triggered immutable segment compaction with retired-file cleanup.
 
 ### Not yet implemented
 
-- Bulk NDJSON ingestion, immutable multi-segment compaction, reindexing, and snapshots.
+- Bulk NDJSON ingestion, reindexing, and snapshots.

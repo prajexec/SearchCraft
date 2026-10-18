@@ -20,7 +20,7 @@ The Phase 1 in-process index stores:
 
 Each indexed document also stores its configured field lengths and the stored source fields returned in a hit. Updating a document removes its existing postings before adding postings for the new version. Deleting a document removes it from the active in-process index and persists a SQLite tombstone.
 
-The first persisted representation is a complete, inspectable JSON snapshot. It is versioned with `magic: SEARCHCRAFT_SEGMENT` and `formatVersion: 1`. This is intentionally easy to inspect while the dataset is small. The worker rewrites the full snapshot after each completed indexing job, so it is not the final high-throughput segment architecture.
+The persisted representation is a set of inspectable JSON segments. Each segment is versioned with `magic: SEARCHCRAFT_SEGMENT`, carries a checksum, and contains one indexing mutation or one compacted live view. A manifest atomically publishes the complete active segment list. The segment reader resolves the highest document version across that list; a tombstone hides every older posting until compaction purges it.
 
 ## BM25
 
@@ -72,6 +72,6 @@ Each index also bounds unique query terms with `maxQueryTerms` (default `32`). Q
 
 - All candidates are scored in memory after posting lookup.
 - Posting lists and term dictionaries are not compressed.
-- The complete JSON snapshot is rewritten for every completed indexing job.
+- JSON segments are intentionally inspectable rather than compressed; compaction currently materializes the resolved live view in memory.
 - Phrase queries, filters, range scoring, synonyms, stemming, and vector search are not implemented.
-- A future multi-segment reader and compactor must preserve the version and tombstone invariants tested here.
+- The multi-segment reader and compactor preserve the version and tombstone invariants tested here. Compaction writes only winning live documents, so deleted tombstones and superseded versions do not contribute to later global statistics.

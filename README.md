@@ -2,7 +2,7 @@
 
 SearchCraft is a lightweight, self-contained search indexing and query service written in strict TypeScript. It is designed as a portfolio-grade backend system that makes search-engine mechanics and operational tradeoffs visible rather than delegating them to OpenSearch or Elasticsearch.
 
-> **Current status:** Phase 2 durable asynchronous indexing. The service exposes operational endpoints, named indexes, durable source documents, a custom Unicode-aware inverted index, BM25 ranking, cursor pagination, a bounded SQLite job queue, worker retries, and restart recovery. Bulk ingestion, filters, compaction, snapshots, and online generation swaps remain later phases.
+> **Current status:** Phase 4 versioned immutable segments and compaction (Phases 0–3 complete). The service exposes operational endpoints, named indexes, durable source documents, a custom Unicode-aware inverted index, global BM25 ranking across segments, filters, cursor pagination, a bounded SQLite job queue, worker retries, restart recovery, checksummed segment publication, and background compaction. Bulk ingestion, index generations, snapshots, and zero-downtime generation swaps remain later phases.
 
 ## Why this project exists
 
@@ -34,8 +34,8 @@ The implementation will favor correctness, explicit consistency semantics, bound
 | BM25 ranking                                            | Implemented                          |
 | Durable asynchronous indexing worker                    | Implemented                          |
 | Filters and cursor pagination                           | Implemented                          |
-| Immutable segments and compaction                       | Planned for Phase 4                  |
-| Bulk ingestion, reindexing, snapshots, and online swaps | Planned for later phases             |
+| Immutable segments and compaction                       | Implemented in Phase 4               |
+| Bulk ingestion, reindexing, snapshots, and online swaps | Planned for Phases 5–8               |
 
 ## Architecture
 
@@ -50,7 +50,7 @@ flowchart LR
     Documents --> SQLite
     SQLite --> Worker[Bounded indexing worker]
     Worker --> Index[Index manager and custom index]
-    Index --> Segments[(Versioned JSON index snapshots)]
+    Index --> Segments[(Checksummed immutable JSON segments)]
     HTTP --> Query[Query engine and BM25]
     Query --> Index
 ```
@@ -161,7 +161,7 @@ It must not be interpreted as search performance. A deterministic indexing and q
 
 The ingestion flow persists a source-document mutation and its indexing job in one SQLite transaction, then lets a bounded worker publish the current index snapshot asynchronously. A successful document write means **durably accepted**, not immediately searchable. Job and index status endpoints expose the eventual-consistency boundary.
 
-SQLite and filesystem writes cannot share one atomic transaction. The planned segment writer will use staging files, validation metadata, atomic renames where supported, and startup recovery. A stale job must never overwrite a newer document version.
+SQLite and filesystem writes cannot share one atomic transaction. Segment files are staged, checksum-validated, atomically renamed, and published through a manifest that swaps the complete active segment list. Readers resolve document versions and tombstones before computing global BM25 statistics; a stale job must never overwrite a newer document version.
 
 ## Documentation map
 
@@ -176,8 +176,8 @@ SQLite and filesystem writes cannot share one atomic transaction. The planned se
 
 ## Known limitations
 
-- The worker currently rewrites one inspectable JSON snapshot per completed job; this is intentionally bounded for small datasets but not the final multi-segment architecture.
-- Bulk NDJSON ingestion, compaction, reindexing, snapshots, and online generation swaps are not implemented yet.
+- JSON segments remain inspectable rather than compressed; the Phase 8 storage enhancements may introduce compressed posting lists or term-dictionary blocks.
+- Bulk NDJSON ingestion, reindexing, snapshots, and online generation swaps are not implemented yet.
 - The current metrics registry is process-local and intentionally lightweight.
 - The current benchmark does not represent search workload behavior.
 - There is no authentication, multitenancy, or distributed rate limiting.

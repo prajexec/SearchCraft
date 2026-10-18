@@ -1,6 +1,6 @@
 # Failure Modes
 
-This document distinguishes implemented Phase 2 behavior from planned bulk and maintenance behavior.
+This document distinguishes implemented asynchronous indexing and Phase 4 segment maintenance from planned bulk and generation behavior.
 
 ## Implemented behavior
 
@@ -13,7 +13,7 @@ This document distinguishes implemented Phase 2 behavior from planned bulk and m
 | Unknown route                                  | `404 route_not_found`                                                        | Use the documented API path                                            |
 | Invalid index or document ID                   | `400` validation error                                                       | Use the documented identifier grammar                                  |
 | Duplicate index creation                       | `409 index_already_exists`                                                   | Choose another name or inspect the existing index                      |
-| Invalid index snapshot at startup              | Rebuild from active non-deleted SQLite documents                             | Preserve the bad file for diagnosis; later recovery will quarantine it |
+| Invalid manifest or segment at startup         | Reject the active list and rebuild from active non-deleted SQLite documents  | Preserve the bad file for diagnosis; later recovery will quarantine it |
 | Segment write fails after source commit        | Request fails; source mutation remains durable                               | Restart rebuilds the active index from SQLite                          |
 | Queue reaches configured outstanding-job limit | `429 queue_saturated` with `Retry-After: 1`; no source mutation is committed | Retry after worker drains jobs                                         |
 | Worker process stops with a processing job     | Job remains `processing` until the next worker startup                       | Startup returns orphaned processing jobs to `pending`                  |
@@ -30,7 +30,7 @@ The API includes `version`, `searchVisible`, `jobId`, and `indexVersion` so call
 
 ## Implemented asynchronous failures
 
-The Phase 2 worker defines and tests:
+The asynchronous worker defines and tests:
 
 - Claimed jobs recovered after worker restart.
 - Stale jobs unable to overwrite newer document versions.
@@ -39,6 +39,8 @@ The Phase 2 worker defines and tests:
 
 Graceful shutdown currently stops the HTTP server and waits for the worker loop before closing SQLite. A future batch worker must add explicit in-flight batch release semantics.
 
-## Planned maintenance failures
+## Implemented segment maintenance failures
 
-Reindexing, compaction, and snapshot restore must build in staging, validate before publication, publish through an atomic manifest replacement, and retain the prior active generation until the new generation is known to be usable. Interrupted staging directories must be discoverable and safe to remove only after checking they are not active.
+Segment compaction builds a consolidated segment, validates it, and publishes it through an atomic manifest replacement. If compaction fails, the previous active segment list remains searchable. Corrupted checksummed segments trigger a source rebuild; interrupted temporary files are never referenced by a manifest.
+
+Reindexing, snapshot restore, and zero-downtime generation swaps remain later maintenance work.

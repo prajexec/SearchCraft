@@ -10,6 +10,7 @@ export interface Config {
   readonly maxBodyBytes: number;
   readonly maxQueryLength: number;
   readonly maxBulkBatchSize: number;
+  readonly segmentCompactionThreshold: number;
   readonly maxPendingJobs: number;
   readonly workerPollIntervalMs: number;
   readonly jobLeaseMs: number;
@@ -25,6 +26,7 @@ const DEFAULTS = {
   maxBodyBytes: 1_048_576,
   maxQueryLength: 1_000,
   maxBulkBatchSize: 1_000,
+  segmentCompactionThreshold: 8,
   maxPendingJobs: 10_000,
   workerPollIntervalMs: 50,
   jobLeaseMs: 30_000,
@@ -88,6 +90,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Config
       'SEARCHCRAFT_MAX_BULK_BATCH_SIZE',
       environment.SEARCHCRAFT_MAX_BULK_BATCH_SIZE,
       DEFAULTS.maxBulkBatchSize,
+    ),
+    segmentCompactionThreshold: parsePositiveInteger(
+      'SEARCHCRAFT_SEGMENT_COMPACTION_THRESHOLD',
+      environment.SEARCHCRAFT_SEGMENT_COMPACTION_THRESHOLD,
+      DEFAULTS.segmentCompactionThreshold,
     ),
     maxPendingJobs: parsePositiveInteger(
       'SEARCHCRAFT_MAX_PENDING_JOBS',

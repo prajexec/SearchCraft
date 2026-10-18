@@ -20,7 +20,7 @@ SearchCraft is a lightweight, self-contained search indexing and query service. 
 | 1     | Searchable vertical slice, tokenization, inverted index, BM25                | Complete |
 | 2     | Durable asynchronous indexing and recovery                                   | Complete |
 | 3     | Filters, field boosts, and cursor pagination                                 | Complete |
-| 4     | Versioned immutable segments and compaction                                  | Planned  |
+| 4     | Versioned immutable segments and compaction                                  | Complete |
 | 5     | Streaming bulk ingestion and operational metrics                             | Planned  |
 | 6     | Generations, reindexing, snapshots, and online swaps                         | Planned  |
 | 7     | Reproducible benchmarks, CI, and engineering polish                          | Planned  |
@@ -78,9 +78,24 @@ Phase 2 acceptance criteria are verified by the asynchronous API, worker, transa
 
 Phase 3 acceptance criteria are verified by filter parser, inverted-index, and API search tests.
 
-## Next implementation slice
+## Phase 4 acceptance criteria
 
-The next slice is Phase 4: replace full-snapshot rewrites with multiple immutable segments, add segment validation and compaction, and preserve search correctness across merges and tombstones.
+- Each indexing publication writes a small immutable segment and atomically appends it to the manifest instead of rewriting the active index.
+- The manifest tracks all active segments for one publication generation, and readers resolve the newest document version before searching.
+- Tombstones hide older postings, deleted and superseded records are excluded from global BM25 statistics, and filtered searches retain exact totals.
+- Segment and manifest integrity metadata rejects corrupted or path-escaping files before they become active.
+- Background compaction merges active segments, purges tombstones and superseded versions, and atomically swaps the compacted segment list.
+- Search remains available from the prior immutable segment view if compaction or validation fails.
+- Unit, API, restart, corruption, and compaction tests protect these behaviors.
+
+Phase 4 acceptance criteria are verified by the immutable-segment, integrity, compaction, and existing search/recovery tests.
+
+## Subsequent roadmap
+
+- **Phase 5:** Streaming bulk ingestion (`POST /indexes/:name/documents/_bulk` with NDJSON) and bulk operational metrics.
+- **Phase 6:** Index generations, offline reindexing from the durable SQLite source, snapshot backups, and zero-downtime generation swaps.
+- **Phase 7:** A reproducible benchmark suite for indexing throughput and search latency, automated CI workflows, and release polish.
+- **Phase 8:** Advanced enhancements selected from measured needs, such as phrase queries, compressed posting lists, or term-dictionary blocks.
 
 ## Required evidence for each phase
 
@@ -95,7 +110,7 @@ Every phase must finish with:
 
 ## Known gaps at project start
 
-- Bulk NDJSON ingestion, compaction, snapshots, and online generation swaps are not implemented yet.
+- Bulk NDJSON ingestion, index generations, snapshots, and online generation swaps are not implemented yet.
 - No external benchmark result exists; the current benchmark script measures only the foundation health endpoint.
 - No authentication or multitenancy is planned for the local-first trust boundary.
 - No license has been selected, so the repository is currently marked `UNLICENSED`.

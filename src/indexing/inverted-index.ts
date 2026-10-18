@@ -1,5 +1,4 @@
-import type { IndexConfig } from '../indexes/index-config';
-import type { SearchDocument } from '../indexes/index-config';
+import type { IndexConfig, SearchDocument } from '../indexes/index-config';
 import { bm25Score } from '../query/bm25';
 import { matchesFilters, type SearchFilters } from '../query/filters';
 import type {
@@ -22,6 +21,11 @@ interface IndexedDocument {
   readonly version: number;
   readonly fields: SearchDocument['fields'];
   readonly fieldLengths: Readonly<Record<string, number>>;
+}
+
+interface ResolvedSegmentDocument {
+  readonly document: SerializedDocument;
+  readonly order: number;
 }
 
 export interface SearchHit {
@@ -76,9 +80,36 @@ function averageLength(documents: Iterable<IndexedDocument>, field: string): num
   return count === 0 ? 0 : total / count;
 }
 
+function isDeleted(document: SerializedDocument): boolean {
+  return document.deleted === true;
+}
+
+function serializedDocument(document: IndexedDocument, deleted = false): SerializedDocument {
+  return {
+    id: document.id,
+    version: document.version,
+    deleted,
+    fields: document.fields,
+    fieldLengths: document.fieldLengths,
+  };
+}
+
+function compareSegmentDocuments(
+  current: ResolvedSegmentDocument | undefined,
+  candidate: SerializedDocument,
+  order: number,
+): boolean {
+  return (
+    current === undefined ||
+    candidate.version > current.document.version ||
+    (candidate.version === current.document.version && order >= current.order)
+  );
+}
+
 export class InvertedIndex {
   private readonly documents = new Map<string, IndexedDocument>();
   private readonly postings = new Map<string, Map<string, Posting>>();
+  private readonly tombstones = new Map<string, number>();
 
   public constructor(
     private readonly indexName: string,
@@ -90,27 +121,68 @@ export class InvertedIndex {
     config: IndexConfig,
     snapshot: SegmentSnapshot,
   ): InvertedIndex {
+    return InvertedIndex.fromSegments(indexName, config, [snapshot]);
+  }
+
+  /**
+   * Materialize the logical index represented by the active immutable
+   * segments. Newer versions win, and a winning tombstone hides every older
+   * posting. BM25 is then computed from this resolved view, so N, df, and
+   * average field lengths are global rather than segment-local.
+   */
+  public static fromSegments(
+    indexName: string,
+    config: IndexConfig,
+    snapshots: readonly SegmentSnapshot[],
+  ): InvertedIndex {
     const index = new InvertedIndex(indexName, config);
-    for (const document of snapshot.documents) {
-      index.documents.set(document.id, {
-        id: document.id,
-        version: document.version,
-        fields: document.fields,
-        fieldLengths: document.fieldLengths,
+    const resolved = new Map<string, ResolvedSegmentDocument>();
+
+    snapshots.forEach((snapshot, order) => {
+      for (const document of snapshot.documents) {
+        if (compareSegmentDocuments(resolved.get(document.id), document, order)) {
+          resolved.set(document.id, { document, order });
+        }
+      }
+    });
+
+    for (const [documentId, resolvedDocument] of resolved) {
+      if (isDeleted(resolvedDocument.document)) {
+        index.tombstones.set(documentId, resolvedDocument.document.version);
+        continue;
+      }
+      index.documents.set(documentId, {
+        id: resolvedDocument.document.id,
+        version: resolvedDocument.document.version,
+        fields: resolvedDocument.document.fields,
+        fieldLengths: resolvedDocument.document.fieldLengths,
       });
     }
-    for (const term of snapshot.terms) {
-      const postingMap = new Map<string, Posting>();
-      for (const posting of term.postings) {
-        postingMap.set(posting.documentId, posting);
+
+    for (const snapshot of snapshots) {
+      for (const term of snapshot.terms) {
+        const key = termKey(term.field, term.term);
+        for (const posting of term.postings) {
+          const resolvedDocument = resolved.get(posting.documentId);
+          if (
+            resolvedDocument === undefined ||
+            isDeleted(resolvedDocument.document) ||
+            resolvedDocument.document.version !== posting.documentVersion
+          ) {
+            continue;
+          }
+          const postingMap = index.postings.get(key) ?? new Map<string, Posting>();
+          postingMap.set(posting.documentId, posting);
+          index.postings.set(key, postingMap);
+        }
       }
-      index.postings.set(termKey(term.field, term.term), postingMap);
     }
     return index;
   }
 
   public upsert(document: SearchDocument, version: number): void {
-    this.remove(document.id);
+    this.removeDocumentData(document.id);
+    this.tombstones.delete(document.id);
     const fieldLengths: Record<string, number> = {};
     for (const fieldName of Object.keys(this.config.searchableFields)) {
       const value = document.fields[fieldName];
@@ -145,30 +217,23 @@ export class InvertedIndex {
     });
   }
 
-  public remove(documentId: string): void {
-    const existing = this.documents.get(documentId);
-    if (existing === undefined) {
-      return;
+  public remove(documentId: string, version?: number): void {
+    const existingTombstone = this.tombstones.get(documentId);
+    this.removeDocumentData(documentId);
+    if (
+      version !== undefined &&
+      (existingTombstone === undefined || version >= existingTombstone)
+    ) {
+      this.tombstones.set(documentId, version);
     }
-
-    for (const fieldName of Object.keys(this.config.searchableFields)) {
-      const value = existing.fields[fieldName];
-      const text = Array.isArray(value) ? value.join(' ') : typeof value === 'string' ? value : '';
-      const terms = new Set(tokenize(text, this.config.maxTokenLength).map((token) => token.term));
-      for (const term of terms) {
-        const key = termKey(fieldName, term);
-        const postingMap = this.postings.get(key);
-        postingMap?.delete(documentId);
-        if (postingMap?.size === 0) {
-          this.postings.delete(key);
-        }
-      }
-    }
-    this.documents.delete(documentId);
   }
 
   public documentVersion(documentId: string): number | undefined {
-    return this.documents.get(documentId)?.version;
+    return this.documents.get(documentId)?.version ?? this.tombstones.get(documentId);
+  }
+
+  public isDocumentDeleted(documentId: string): boolean {
+    return this.tombstones.has(documentId) && !this.documents.has(documentId);
   }
 
   public search(
@@ -270,28 +335,92 @@ export class InvertedIndex {
   public toSnapshot(generation: number): SegmentSnapshot {
     const documents: SerializedDocument[] = [...this.documents.values()]
       .sort((left, right) => compareText(left.id, right.id))
-      .map((document) => ({
-        id: document.id,
-        version: document.version,
-        fields: document.fields,
-        fieldLengths: document.fieldLengths,
-      }));
+      .map((document) => serializedDocument(document));
+    return this.snapshotForDocuments(generation, documents, this.postings);
+  }
+
+  /** Serialize only one mutation so normal indexing never rewrites old data. */
+  public toDeltaSnapshot(generation: number, documentId: string): SegmentSnapshot {
+    const document = this.documents.get(documentId);
+    if (document !== undefined) {
+      const filteredPostings = new Map<string, Map<string, Posting>>();
+      for (const [key, postingMap] of this.postings) {
+        const posting = postingMap.get(documentId);
+        if (posting !== undefined) {
+          filteredPostings.set(key, new Map([[documentId, posting]]));
+        }
+      }
+      return this.snapshotForDocuments(
+        generation,
+        [serializedDocument(document)],
+        filteredPostings,
+      );
+    }
+
+    const version = this.tombstones.get(documentId);
+    if (version === undefined) {
+      throw new Error(`document "${documentId}" is not present in the index`);
+    }
+    return this.snapshotForDocuments(
+      generation,
+      [
+        {
+          id: documentId,
+          version,
+          deleted: true,
+          fields: {},
+          fieldLengths: {},
+        },
+      ],
+      new Map(),
+    );
+  }
+
+  private removeDocumentData(documentId: string): void {
+    const existing = this.documents.get(documentId);
+    if (existing === undefined) {
+      return;
+    }
+
+    for (const fieldName of Object.keys(this.config.searchableFields)) {
+      const value = existing.fields[fieldName];
+      const text = Array.isArray(value) ? value.join(' ') : typeof value === 'string' ? value : '';
+      const terms = new Set(tokenize(text, this.config.maxTokenLength).map((token) => token.term));
+      for (const term of terms) {
+        const key = termKey(fieldName, term);
+        const postingMap = this.postings.get(key);
+        postingMap?.delete(documentId);
+        if (postingMap?.size === 0) {
+          this.postings.delete(key);
+        }
+      }
+    }
+    this.documents.delete(documentId);
+  }
+
+  private snapshotForDocuments(
+    generation: number,
+    documents: readonly SerializedDocument[],
+    sourcePostings: ReadonlyMap<string, ReadonlyMap<string, Posting>>,
+  ): SegmentSnapshot {
     const terms: SerializedTerm[] = [];
-    for (const [key, postingMap] of this.postings) {
+    for (const [key, postingMap] of sourcePostings) {
       const separator = key.indexOf('\u0000');
       const field = key.slice(0, separator);
       const term = key.slice(separator + 1);
       const postings: SerializedPosting[] = [...postingMap.values()].sort((left, right) =>
         compareText(left.documentId, right.documentId),
       );
-      terms.push({ field, term, postings });
+      if (postings.length > 0) {
+        terms.push({ field, term, postings });
+      }
     }
     terms.sort((left, right) =>
       compareText(`${left.field}\u0000${left.term}`, `${right.field}\u0000${right.term}`),
     );
     return {
       magic: 'SEARCHCRAFT_SEGMENT',
-      formatVersion: 1,
+      formatVersion: 2,
       indexName: this.indexName,
       generation,
       createdAt: new Date().toISOString(),

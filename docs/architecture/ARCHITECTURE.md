@@ -2,7 +2,7 @@
 
 ## Scope of this document
 
-This document describes the implemented Phase 2 asynchronous indexing service and the stable boundaries that later query and maintenance phases will fill in. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
+This document describes the implemented Phase 4 versioned immutable-segment indexing service. Phases 0–3 established the runtime, durable asynchronous jobs, filters, field boosts, and cursor pagination; Phase 4 adds checksummed multi-segment publication, cross-segment version resolution, and background compaction. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
 
 ## Runtime model
 
@@ -16,7 +16,7 @@ flowchart TB
         SQLiteAccess[SQLite access]
         Indexing[Bounded indexing worker]
         Query[Query engine and BM25]
-        Maintenance[Planned maintenance]
+        Maintenance[Segment compaction and validation]
     end
 
     HTTP --> Observability
@@ -24,13 +24,13 @@ flowchart TB
     HTTP --> Indexing
     HTTP --> Query
     HTTP -. future .-> Maintenance
-    Indexing -. future .-> SQLiteAccess
+    Indexing -.-> SQLiteAccess
     Query --> SQLiteAccess
-    Maintenance -. future .-> SQLiteAccess
+    Maintenance -.-> SQLiteAccess
     SQLiteAccess --> Database[(SQLite file)]
-    Indexing -. future .-> Disk[(Index generations and snapshots)]
-    Query -. future .-> Disk
-    Maintenance -. future .-> Disk
+    Indexing --> Disk[(Immutable index segments)]
+    Query --> Disk
+    Maintenance --> Disk
 ```
 
 ## Responsibilities
@@ -47,7 +47,7 @@ The storage boundary owns SQLite initialization, explicit migrations, WAL setup,
 
 ### Indexing engine
 
-The current indexing boundary owns Unicode tokenization, field-aware posting construction, term frequencies, positions, BM25 statistics, and versioned JSON snapshot publication. Later phases will add multiple immutable segments and compaction so readers are independent of in-progress writes.
+The indexing boundary owns Unicode tokenization, field-aware posting construction, term frequencies, positions, global BM25 statistics, checksummed immutable segment publication, and version/tombstone resolution across active segments. Compaction merges the resolved live view into a new segment and atomically swaps the manifest without exposing a partial file list to readers.
 
 ### Query engine
 
@@ -55,7 +55,7 @@ The query boundary owns query tokenization, term lookup, candidate retrieval, BM
 
 ### Maintenance
 
-The planned maintenance boundary owns reindexing, snapshots, staging cleanup, generation validation, and safe publication. It must keep the currently active generation usable when a build fails.
+The maintenance boundary owns segment validation, background compaction, staging cleanup, and safe publication. Later phases will add reindexing and snapshots. It must keep the currently active segment list usable when a merge or validation step fails.
 
 ### Observability
 
@@ -78,7 +78,7 @@ sequenceDiagram
     H-->>C: 200 readiness response
 ```
 
-The production document flow validates the request, commits the source mutation and indexing job in one SQLite transaction, and returns `202 Accepted`. The bounded worker claims the job, checks the latest document version, updates the custom index, publishes a snapshot, and marks the job complete. Search visibility is therefore eventually consistent and observable through job/status endpoints.
+The production document flow validates the request, commits the source mutation and indexing job in one SQLite transaction, and returns `202 Accepted`. The bounded worker claims the job, checks the latest document version, appends a checksummed immutable segment, and marks the job complete after manifest publication. Search visibility is therefore eventually consistent and observable through job/status endpoints.
 
 ## Persistence boundaries
 
@@ -89,7 +89,7 @@ The initial migration creates:
 - `documents` for the latest durable source document version and tombstone state.
 - `indexing_jobs` for durable upsert/delete work and retry metadata.
 
-The current search index lives below the configured data directory in a named index directory with a manifest and versioned JSON snapshots. SQLite and filesystem operations cannot share one transaction. The current implementation uses source-document rebuild recovery; later immutable segments, validation metadata, compaction, and durable job replay will make that boundary more efficient and explicit.
+The search index lives below the configured data directory in a named index directory with a checksummed manifest and immutable JSON segments. SQLite and filesystem operations cannot share one transaction. A corrupt or incomplete active segment list falls back to a rebuild from durable source documents; successful indexing appends a new segment and atomically publishes the complete active list.
 
 ## Resource model
 
@@ -113,7 +113,7 @@ No capacity or latency claim is made until the benchmark harness measures a defi
 - Invalid request limits produce a safe JSON error without stack traces.
 - The server handles SIGINT and SIGTERM by stopping new connections, closing the HTTP server, and closing SQLite.
 
-Job recovery, stale-version handling, queue saturation, and retry behavior are documented in [FAILURE_MODES.md](FAILURE_MODES.md). Corrupt segments, interrupted compaction, and generation swaps remain later maintenance work.
+Job recovery, stale-version handling, queue saturation, and retry behavior are documented in [FAILURE_MODES.md](FAILURE_MODES.md). Corrupt segments are rejected by checksum and structural validation, while interrupted compaction leaves the previous manifest usable. Index generations and zero-downtime generation swaps remain later work.
 
 ## Technology tradeoffs
 
