@@ -30,7 +30,10 @@ All notable changes to SearchCraft are recorded here.
 - Atomic bulk source-document and indexing-job transactions with bounded queue admission.
 - Batched worker claims and one multi-document segment publication per index.
 - Bulk request, document, and latency metrics with OpenAPI coverage.
+- Background online reindexing with atomic target-generation manifest swaps.
+- Validated gzip snapshot archives containing SQLite and active index segments, with restore tooling.
+- Reproducible bulk-throughput and BM25-latency benchmark output plus pull-request/main CI checks.
 
 ### Not yet implemented
 
-- Reindexing, snapshots, and online generation swaps.
+- Phrase queries, posting-list compression, and prefix term dictionary blocks.

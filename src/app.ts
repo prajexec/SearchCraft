@@ -451,6 +451,35 @@ async function handleRequest(
       return;
     }
 
+    const reindexStatusMatch = url.pathname.match(
+      /^\/v1\/indexes\/([^/]+)\/documents\/_reindex\/([^/]+)$/,
+    );
+    if (reindexStatusMatch !== null) {
+      ensureMethod(request, 'GET');
+      const indexManager = requireIndexManager(dependencies);
+      const indexName = requireIndexName(reindexStatusMatch[1] ?? '');
+      const jobId = requireJobId(reindexStatusMatch[2] ?? '');
+      const status = indexManager.getReindexStatus(indexName, jobId);
+      if (status === undefined) {
+        throw new AppError(404, 'reindex_not_found', `Reindex job "${jobId}" does not exist`);
+      }
+      sendJson(response, 200, status);
+      return;
+    }
+
+    const reindexMatch = url.pathname.match(/^\/v1\/indexes\/([^/]+)\/documents\/_reindex$/);
+    if (reindexMatch !== null) {
+      ensureMethod(request, 'POST');
+      const indexManager = requireIndexManager(dependencies);
+      const indexName = requireIndexName(reindexMatch[1] ?? '');
+      const status = indexManager.startReindex(indexName);
+      if (status === undefined) {
+        throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+      }
+      sendJson(response, 202, status);
+      return;
+    }
+
     const documentMatch = url.pathname.match(/^\/v1\/indexes\/([^/]+)\/documents\/([^/]+)$/);
     if (documentMatch !== null) {
       const indexManager = requireIndexManager(dependencies);

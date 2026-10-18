@@ -2,7 +2,7 @@
 
 ## Scope of this document
 
-This document describes the implemented Phase 5 versioned immutable-segment indexing service. Phases 0–3 established the runtime, durable asynchronous jobs, filters, field boosts, and cursor pagination; Phase 4 adds checksummed multi-segment publication, cross-segment version resolution, and background compaction; Phase 5 adds bounded NDJSON bulk ingestion, atomic batch transactions, batched worker publication, and ingestion metrics. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
+This document describes the implemented Phase 7 versioned immutable-segment indexing service. Phases 0–3 established the runtime, durable asynchronous jobs, filters, field boosts, and cursor pagination; Phase 4 adds checksummed multi-segment publication, cross-segment version resolution, and background compaction; Phase 5 adds bounded NDJSON bulk ingestion, atomic batch transactions, batched worker publication, and ingestion metrics; Phase 6 adds online target-generation reindexing, atomic swaps, and validated snapshot archives; Phase 7 adds reproducible workload measurement and CI checks. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
 
 ## Runtime model
 
@@ -17,7 +17,7 @@ flowchart TB
         SQLiteAccess[SQLite access]
         Indexing[Bounded indexing worker and batch publisher]
         Query[Query engine and BM25]
-        Maintenance[Segment compaction and validation]
+        Maintenance[Reindexing, compaction, snapshots, and validation]
     end
 
     HTTP --> Observability
@@ -27,7 +27,7 @@ flowchart TB
     HTTP --> Bulk
     Bulk --> SQLiteAccess
     Bulk --> Indexing
-    HTTP -. future .-> Maintenance
+    HTTP --> Maintenance
     Indexing -.-> SQLiteAccess
     Query --> SQLiteAccess
     Maintenance -.-> SQLiteAccess
@@ -43,7 +43,7 @@ flowchart TB
 
 The HTTP layer owns request IDs, route matching, request limits, status codes, JSON serialization, and error envelopes. Search algorithms and SQL statements do not belong in route handlers.
 
-Implemented routes include `/health`, `/ready`, `/metrics`, `/metrics/prometheus`, `/openapi.json`, named index management, document CRUD, `POST /v1/indexes/{index}/documents/_bulk`, and BM25 search. Bulk requests use a bounded streaming NDJSON parser and conventional two-line action/source records; all source mutations and jobs in one request commit atomically.
+Implemented routes include `/health`, `/ready`, `/metrics`, `/metrics/prometheus`, `/openapi.json`, named index management, document CRUD, `POST /v1/indexes/{index}/documents/_bulk`, online reindex start/status routes, and BM25 search. Bulk requests use a bounded streaming NDJSON parser and conventional two-line action/source records; all source mutations and jobs in one request commit atomically.
 
 ### Storage
 
@@ -59,7 +59,7 @@ The query boundary owns query tokenization, term lookup, candidate retrieval, BM
 
 ### Maintenance
 
-The maintenance boundary owns segment validation, background compaction, staging cleanup, and safe publication. Later phases will add reindexing and snapshots. It must keep the currently active segment list usable when a merge or validation step fails.
+The maintenance boundary owns segment validation, background reindexing, generation swaps, compaction, snapshot archives, staging cleanup, and safe publication. It must keep the currently active segment list usable when a merge, reindex, or validation step fails.
 
 ### Observability
 
@@ -82,7 +82,7 @@ sequenceDiagram
     H-->>C: 200 readiness response
 ```
 
-The production document flow validates the request, commits the source mutation and indexing job in one SQLite transaction, and returns `202 Accepted`. The bounded worker claims jobs in batches, checks the latest document versions, appends one checksummed immutable segment per index batch, and marks jobs complete after manifest publication. Search visibility is therefore eventually consistent and observable through job/status endpoints. Bulk request count, accepted document count, and bounded request-latency histograms use the shared metrics registry.
+The production document flow validates the request, commits the source mutation and indexing job in one SQLite transaction, and returns `202 Accepted`. The bounded worker claims jobs in batches, checks the latest document versions, appends one checksummed immutable segment per index batch, and marks jobs complete after manifest publication. Online reindexing builds a complete target segment from SQLite, validates it, and swaps the manifest and in-memory reader only after preparation succeeds. Search visibility is therefore eventually consistent and observable through job/status endpoints. Bulk request count, accepted document count, and bounded request-latency histograms use the shared metrics registry.
 
 ## Persistence boundaries
 
@@ -93,7 +93,7 @@ The initial migration creates:
 - `documents` for the latest durable source document version and tombstone state.
 - `indexing_jobs` for durable upsert/delete work and retry metadata; one bulk request creates one job per document action in the same transaction.
 
-The search index lives below the configured data directory in a named index directory with a checksummed manifest and immutable JSON segments. SQLite and filesystem operations cannot share one transaction. A corrupt or incomplete active segment list falls back to a rebuild from durable source documents; successful indexing appends a new segment and atomically publishes the complete active list.
+The search index lives below the configured data directory in a named index directory with a checksummed manifest and immutable JSON segments. SQLite and filesystem operations cannot share one transaction. A corrupt or incomplete active segment list falls back to a rebuild from durable source documents; successful indexing appends a new segment and atomically publishes the complete active list. Snapshot archives contain a SQLite `VACUUM INTO` copy plus the active manifest and segment files.
 
 ## Resource model
 

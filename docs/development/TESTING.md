@@ -13,7 +13,7 @@ npm run docs:check
 npm run build
 ```
 
-The current tests cover configuration validation, bounded metrics, idempotent SQLite migrations, operational HTTP endpoints, Unicode tokenization, hand-calculated BM25 scoring, posting updates/deletes, immutable segment publication, checksum recovery, cross-segment version precedence, API ingestion, cursor pagination, transactional jobs, queue saturation, retry transitions, asynchronous completion, stale versions, compaction, restart recovery, streaming bulk parsing, atomic bulk transactions, batched worker publication, and bulk OpenAPI/metrics behavior. Snapshots and generation failure tests will be added with their respective phases.
+The current tests cover configuration validation, bounded metrics, idempotent SQLite migrations, operational HTTP endpoints, Unicode tokenization, hand-calculated BM25 scoring, posting updates/deletes, immutable segment publication, checksum recovery, cross-segment version precedence, API ingestion, cursor pagination, transactional jobs, queue saturation, retry transitions, asynchronous completion, stale versions, compaction, restart recovery, streaming bulk parsing, atomic bulk transactions, batched worker publication, bulk OpenAPI/metrics behavior, online generation swaps, snapshot archive validation/restores, and reindex status behavior. The benchmark harness is smoke-tested with a deterministic local workload; timing results remain machine-dependent.
 
 ## Test categories
 

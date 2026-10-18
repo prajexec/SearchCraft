@@ -25,20 +25,20 @@ curl -fsS http://127.0.0.1:3000/metrics/prometheus
 
 ## Runtime data
 
-The default runtime directory is `data/`. It will eventually contain:
+The default runtime directory is `data/`. It contains:
 
 - `searchcraft.sqlite` and SQLite WAL files.
-- Index generation directories.
+- Active and retired index generation files.
 - Staging directories for reindexing and compaction.
-- Snapshot metadata and files.
+- Snapshot archives and temporary snapshot data.
 
-Do not delete runtime data while the service is running. Back up the database and active index generations together when the corresponding snapshot feature is available.
+Do not delete runtime data while the service is running. Use the snapshot command to back up the database and active index generations together.
 
 ## Current recovery behavior
 
 If migration or SQLite initialization fails, the process exits rather than claiming readiness. Stop the process, preserve the data directory, inspect the error, and run `npm run db:migrate` after correcting the underlying path or permission issue.
 
-The current Phase 2 job and generation recovery procedures are documented in [RECOVERY.md](RECOVERY.md). Snapshot restore and multi-segment corruption procedures will be added when those features exist.
+The current Phase 6 job, generation, corruption, and snapshot recovery procedures are documented in [RECOVERY.md](RECOVERY.md). Restore requires the service and its SQLite connection to be stopped.
 
 ## Resource guidance
 

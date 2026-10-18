@@ -241,6 +241,43 @@ export const openapiDocument = {
         },
       },
     },
+    '/v1/indexes/{index}/documents/_reindex': {
+      parameters: [{ $ref: '#/components/parameters/IndexName' }],
+      post: {
+        operationId: 'startReindex',
+        summary: 'Start an online index reindex',
+        description:
+          'Builds a target immutable generation from durable SQLite source documents in the background. Reads continue against the current generation until the new manifest is atomically published.',
+        responses: {
+          '202': {
+            description: 'Reindex started or an already-running reindex was returned.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ReindexStatus' } },
+            },
+          },
+          '404': { description: 'Index not found.' },
+        },
+      },
+    },
+    '/v1/indexes/{index}/documents/_reindex/{jobId}': {
+      parameters: [
+        { $ref: '#/components/parameters/IndexName' },
+        { $ref: '#/components/parameters/ReindexJobId' },
+      ],
+      get: {
+        operationId: 'getReindexStatus',
+        summary: 'Inspect an online reindex',
+        responses: {
+          '200': {
+            description: 'Current reindex state.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ReindexStatus' } },
+            },
+          },
+          '404': { description: 'Reindex job not found.' },
+        },
+      },
+    },
     '/v1/indexes/{index}/search': {
       parameters: [{ $ref: '#/components/parameters/IndexName' }],
       get: {
@@ -393,6 +430,12 @@ export const openapiDocument = {
         required: true,
         schema: { type: 'string', format: 'uuid' },
       },
+      ReindexJobId: {
+        name: 'jobId',
+        in: 'path',
+        required: true,
+        schema: { type: 'string', format: 'uuid' },
+      },
     },
     schemas: {
       IndexConfig: {
@@ -513,6 +556,29 @@ export const openapiDocument = {
             },
           },
           tookMs: { type: 'number' },
+        },
+      },
+      ReindexStatus: {
+        type: 'object',
+        required: [
+          'jobId',
+          'indexName',
+          'state',
+          'targetGeneration',
+          'sourceDocumentCount',
+          'startedAt',
+          'completedAt',
+          'error',
+        ],
+        properties: {
+          jobId: { type: 'string', format: 'uuid' },
+          indexName: { type: 'string' },
+          state: { type: 'string', enum: ['pending', 'running', 'completed', 'failed'] },
+          targetGeneration: { type: 'integer' },
+          sourceDocumentCount: { type: 'integer' },
+          startedAt: { type: ['string', 'null'], format: 'date-time' },
+          completedAt: { type: ['string', 'null'], format: 'date-time' },
+          error: { type: ['string', 'null'] },
         },
       },
       IndexMetadata: {

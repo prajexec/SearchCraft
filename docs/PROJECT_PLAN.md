@@ -22,8 +22,8 @@ SearchCraft is a lightweight, self-contained search indexing and query service. 
 | 3     | Filters, field boosts, and cursor pagination                                 | Complete |
 | 4     | Versioned immutable segments and compaction                                  | Complete |
 | 5     | Streaming bulk ingestion and operational metrics                             | Complete |
-| 6     | Generations, reindexing, snapshots, and online swaps                         | Planned  |
-| 7     | Reproducible benchmarks, CI, and engineering polish                          | Planned  |
+| 6     | Generations, reindexing, snapshots, and online swaps                         | Complete |
+| 7     | Reproducible benchmarks, CI, and engineering polish                          | Complete |
 | 8     | Optional advanced features selected from measured needs                      | Planned  |
 
 ## Phase 0 acceptance criteria
@@ -103,10 +103,28 @@ Phase 4 acceptance criteria are verified by the immutable-segment, integrity, co
 
 Phase 5 acceptance criteria are verified by streaming parser, bulk API, transaction, worker-batch, metrics, and OpenAPI tests.
 
+## Phase 6 acceptance criteria
+
+- `POST /v1/indexes/:name/documents/_reindex` starts a background rebuild from authoritative SQLite source documents without changing the active reader until publication.
+- A target generation is written and validated as an immutable segment, then the manifest's active generation pointer is atomically swapped; prior reads remain available if preparation fails.
+- Reindex status is observable through `GET /v1/indexes/:name/documents/_reindex/:jobId`, including the target generation, source count, completion state, and failure message.
+- Snapshot creation uses SQLite `VACUUM INTO` plus the active manifests and referenced segments to produce a validated gzip-compressed archive.
+- Snapshot restore validates the archive, atomically restores the database and active index files, removes stale SQLite sidecars, and preserves unrelated target data.
+- Snapshot create and restore commands and disaster-recovery runbooks document the required process-stop boundary.
+
+Phase 6 acceptance criteria are verified by reindex API/generation-swap and snapshot archive/restore tests.
+
+## Phase 7 acceptance criteria
+
+- The benchmark measures synchronous bulk indexing throughput in documents per second across configurable batch sizes.
+- The benchmark measures deterministic BM25 search latency at p50, p95, and p99 and emits one machine-readable JSON result.
+- Benchmark inputs, warm-up assumptions, timing boundaries, and interpretation limits are documented.
+- GitHub Actions runs typecheck, lint, format, tests, documentation/OpenAPI checks, and build on pushes and pull requests using Node.js 22.
+
+Phase 7 acceptance criteria are verified by the benchmark smoke run and the checked-in CI workflow.
+
 ## Subsequent roadmap
 
-- **Phase 6:** Index generations, offline reindexing from the durable SQLite source, snapshot backups, and zero-downtime generation swaps.
-- **Phase 7:** A reproducible benchmark suite for indexing throughput and search latency, automated CI workflows, and release polish.
 - **Phase 8:** Advanced enhancements selected from measured needs, such as phrase queries, compressed posting lists, or term-dictionary blocks.
 
 ## Required evidence for each phase
@@ -122,7 +140,6 @@ Every phase must finish with:
 
 ## Known gaps at project start
 
-- Index generations, snapshots, and online generation swaps are not implemented yet.
-- No external benchmark result exists; the current benchmark script measures only the foundation health endpoint.
+- Advanced search enhancements selected from measurement are not implemented yet.
 - No authentication or multitenancy is planned for the local-first trust boundary.
 - No license has been selected, so the repository is currently marked `UNLICENSED`.

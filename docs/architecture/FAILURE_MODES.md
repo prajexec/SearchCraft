@@ -1,6 +1,6 @@
 # Failure Modes
 
-This document distinguishes implemented asynchronous indexing, Phase 5 bulk ingestion, and segment maintenance from planned generation behavior.
+This document distinguishes implemented asynchronous indexing, Phase 5 bulk ingestion, Phase 6 generation/snapshot maintenance, and planned advanced search behavior.
 
 ## Implemented behavior
 
@@ -17,6 +17,8 @@ This document distinguishes implemented asynchronous indexing, Phase 5 bulk inge
 | Duplicate index creation                       | `409 index_already_exists`                                                   | Choose another name or inspect the existing index                      |
 | Invalid manifest or segment at startup         | Reject the active list and rebuild from active non-deleted SQLite documents  | Preserve the bad file for diagnosis; later recovery will quarantine it |
 | Segment write fails after source commit        | Request fails; source mutation remains durable                               | Restart rebuilds the active index from SQLite                          |
+| Online reindex preparation fails               | Prior active generation remains searchable; reindex reports `failed`         | Correct the source/filesystem issue and start another reindex          |
+| Snapshot archive validation fails              | Create or restore stops before replacing target files                        | Preserve the source/target and repair or replace the archive           |
 | Queue reaches configured outstanding-job limit | `429 queue_saturated` with `Retry-After: 1`; no source mutation is committed | Retry after worker drains jobs                                         |
 | Bulk create conflicts or update target missing | `409`; the complete batch is rolled back                                     | Correct the IDs or use `index` for replacement                         |
 | Worker process stops with a processing job     | Job remains `processing` until the next worker startup                       | Startup returns orphaned processing jobs to `pending`                  |
@@ -36,6 +38,8 @@ The API includes `version`, `searchVisible`, `jobId`, and `indexVersion` so call
 Bulk requests are parsed from incoming chunks with a bounded line buffer. The parser counts UTF-8 body bytes and logical operations before storage. It accepts `index`, `create`, `update`, and `delete` actions; `update` merges fields into the current non-deleted source document. A valid batch uses one SQLite transaction for all source rows and indexing jobs, and queue admission is checked for the complete batch before any row is committed. Parse, validation, create-conflict, missing-update, and queue-saturation failures leave the database unchanged.
 
 The worker claims bounded job batches and groups them by index so the current documents can be published through one multi-document immutable segment per group. Stale jobs remain safely superseded by the latest source version.
+
+Online reindexing builds a complete target generation from durable non-deleted source documents, validates the segment, atomically publishes a one-segment manifest, and only then swaps the in-memory reader and SQLite active-generation metadata. Snapshot creation uses SQLite `VACUUM INTO` and active manifest references; restore validates all archive contents before staging and replacing the target active index files. Restore is an operator action and requires the service to be stopped.
 
 ## Implemented asynchronous failures
 

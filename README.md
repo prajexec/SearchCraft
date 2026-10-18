@@ -2,7 +2,7 @@
 
 SearchCraft is a lightweight, self-contained search indexing and query service written in strict TypeScript. It is designed as a portfolio-grade backend system that makes search-engine mechanics and operational tradeoffs visible rather than delegating them to OpenSearch or Elasticsearch.
 
-> **Current status:** Phase 5 streaming bulk ingestion and operational metrics (Phases 0–4 complete). The service exposes operational endpoints, named indexes, durable source documents, bounded NDJSON bulk actions, a custom Unicode-aware inverted index, global BM25 ranking across segments, filters, cursor pagination, a bounded SQLite job queue, batched worker publication, restart recovery, checksummed segment publication, and background compaction. Index generations, snapshots, and zero-downtime generation swaps remain later phases.
+> **Current status:** Phase 7 benchmarks, CI, and engineering polish (Phases 0–6 complete). The service exposes operational endpoints, named indexes, durable source documents, bounded NDJSON bulk actions, online generation reindexing, validated snapshot archives, a custom Unicode-aware inverted index, global BM25 ranking across segments, filters, cursor pagination, a bounded SQLite job queue, batched worker publication, restart recovery, checksummed segment publication, and background compaction. Advanced phrase and storage-compression features remain Phase 8 work.
 
 ## Why this project exists
 
@@ -36,7 +36,10 @@ The implementation will favor correctness, explicit consistency semantics, bound
 | Filters and cursor pagination                          | Implemented                          |
 | Immutable segments and compaction                      | Implemented in Phase 4               |
 | Streaming NDJSON bulk ingestion and batch metrics      | Implemented in Phase 5               |
-| Reindexing, snapshots, and online generation swaps     | Planned for Phases 6–8               |
+| Online reindexing and generation swaps                 | Implemented in Phase 6               |
+| Snapshot archives and restore tooling                  | Implemented in Phase 6               |
+| Reproducible workload benchmark and CI                 | Implemented in Phase 7               |
+| Phrase queries and index compression                   | Planned for Phase 8                  |
 
 ## Architecture
 
@@ -148,6 +151,21 @@ curl -sS -X POST http://127.0.0.1:3000/v1/indexes/products/documents/_bulk \
 
 Bulk source mutations and their indexing jobs commit in one SQLite transaction. The request is rejected without partial writes when the NDJSON is invalid, the batch exceeds configured limits, a `create` conflicts, an `update` target is missing, or the bounded queue cannot admit the complete batch. Production bulk requests return `202` with one job ID per accepted action; the worker claims bounded batches and publishes one multi-document segment per index.
 
+Start an online rebuild from the durable SQLite source and poll its status without interrupting reads:
+
+```bash
+curl -sS -X POST http://127.0.0.1:3000/v1/indexes/products/documents/_reindex | jq
+curl -sS http://127.0.0.1:3000/v1/indexes/products/documents/_reindex/<job-id> | jq
+```
+
+Create and restore a validated point-in-time archive with the snapshot commands. Stop the service before restoring:
+
+```bash
+npm run snapshot:create -- --output ./data/snapshots/searchcraft.snapshot.gz
+# Stop SearchCraft before restoring.
+npm run snapshot:restore -- --archive ./data/snapshots/searchcraft.snapshot.gz
+```
+
 ## Quality checks
 
 ```bash
@@ -159,14 +177,14 @@ npm run docs:check
 npm run build
 ```
 
-The current benchmark is an actual foundation smoke benchmark for the health endpoint. It reports p50, p95, and p99 latency for a configurable number of local requests:
+The current benchmark measures synchronous bulk indexing throughput across batch sizes and BM25 search latency at p50, p95, and p99:
 
 ```bash
 npm run benchmark
-SEARCHCRAFT_BENCHMARK_ITERATIONS=1000 npm run benchmark
+SEARCHCRAFT_BENCHMARK_DOCUMENTS=1000 SEARCHCRAFT_BENCHMARK_BATCH_SIZES=10,100 npm run benchmark
 ```
 
-It must not be interpreted as search performance. A deterministic indexing and query benchmark will be introduced with the search engine phases.
+See [`docs/development/BENCHMARKING.md`](docs/development/BENCHMARKING.md) for workload controls and interpretation limits. Results are local, sequential, and machine-dependent.
 
 ## Persistence and consistency direction
 
@@ -188,7 +206,7 @@ SQLite and filesystem writes cannot share one atomic transaction. Segment files 
 ## Known limitations
 
 - JSON segments remain inspectable rather than compressed; the Phase 8 storage enhancements may introduce compressed posting lists or term-dictionary blocks.
-- Reindexing, snapshots, and online generation swaps are not implemented yet.
+- Phrase queries, posting-list compression, and prefix term dictionary blocks are not implemented yet.
 - The current metrics registry is process-local and intentionally lightweight.
 - The current benchmark does not represent search workload behavior.
 - There is no authentication, multitenancy, or distributed rate limiting.

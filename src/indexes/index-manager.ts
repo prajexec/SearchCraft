@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -51,11 +52,25 @@ export interface SearchResponse {
   readonly indexVersion: number;
 }
 
+export type ReindexState = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface ReindexStatus {
+  readonly jobId: string;
+  readonly indexName: string;
+  readonly state: ReindexState;
+  readonly targetGeneration: number;
+  readonly sourceDocumentCount: number;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+  readonly error: string | null;
+}
+
 export class IndexManager {
   private readonly indexes = new Map<string, RuntimeIndex>();
   private readonly indexRepository: IndexRepository;
   private readonly documentRepository: DocumentRepository;
   private readonly jobRepository: JobRepository;
+  private readonly reindexes = new Map<string, ReindexStatus>();
 
   public constructor(
     private readonly database: DatabaseSync,
@@ -300,6 +315,41 @@ export class IndexManager {
     return true;
   }
 
+  public startReindex(indexName: string): ReindexStatus | undefined {
+    const runtime = this.indexes.get(indexName);
+    if (runtime === undefined) {
+      return undefined;
+    }
+
+    const existing = [...this.reindexes.values()].find(
+      (status) =>
+        status.indexName === indexName &&
+        (status.state === 'pending' || status.state === 'running'),
+    );
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const status: ReindexStatus = {
+      jobId: randomUUID(),
+      indexName,
+      state: 'pending',
+      targetGeneration: runtime.generation + 1,
+      sourceDocumentCount: 0,
+      startedAt: null,
+      completedAt: null,
+      error: null,
+    };
+    this.reindexes.set(status.jobId, status);
+    setImmediate(() => this.runReindex(status.jobId));
+    return status;
+  }
+
+  public getReindexStatus(indexName: string, jobId: string): ReindexStatus | undefined {
+    const status = this.reindexes.get(jobId);
+    return status?.indexName === indexName ? status : undefined;
+  }
+
   private publishMutation(runtime: RuntimeIndex, documentIds: string | readonly string[]): void {
     const nextGeneration = runtime.generation + 1;
     const snapshot = runtime.index.toDeltaSnapshot(nextGeneration, documentIds);
@@ -362,6 +412,10 @@ export class IndexManager {
     runtime.activeSegments = [...manifestSegmentFiles(manifest)];
     runtime.generation = manifest.activeGeneration;
     this.indexRepository.setActiveGeneration(runtime.metadata.name, runtime.generation);
+    this.unlinkRetiredSegments(runtime, previousSegments);
+  }
+
+  private unlinkRetiredSegments(runtime: RuntimeIndex, previousSegments: readonly string[]): void {
     for (const file of previousSegments) {
       if (runtime.activeSegments.includes(file)) {
         continue;
@@ -397,6 +451,61 @@ export class IndexManager {
         // next mutation will schedule another attempt.
       }
     });
+  }
+
+  private runReindex(jobId: string): void {
+    const pending = this.reindexes.get(jobId);
+    if (pending === undefined) {
+      return;
+    }
+    this.reindexes.set(jobId, {
+      ...pending,
+      state: 'running',
+      startedAt: new Date().toISOString(),
+    });
+
+    try {
+      const runtime = this.indexes.get(pending.indexName);
+      if (runtime === undefined) {
+        throw new Error(`index "${pending.indexName}" no longer exists`);
+      }
+      const sourceDocuments = this.documentRepository.listActive(pending.indexName);
+      const rebuilt = new InvertedIndex(pending.indexName, runtime.metadata.config);
+      for (const document of sourceDocuments) {
+        rebuilt.upsert(document, document.version);
+      }
+
+      // Request callbacks are serialized by Node. No source mutation can
+      // interleave with this callback while the target generation is built.
+      const targetGeneration = runtime.generation + 1;
+      const snapshot = rebuilt.toSnapshot(targetGeneration);
+      const previousSegments = [...runtime.activeSegments];
+      const manifest = replaceWithCompactedSegmentAtomic(runtime.directory, snapshot);
+      runtime.index = rebuilt;
+      runtime.activeSegments = [...manifestSegmentFiles(manifest)];
+      runtime.generation = manifest.activeGeneration;
+      this.indexRepository.setActiveGeneration(pending.indexName, runtime.generation);
+      this.unlinkRetiredSegments(runtime, previousSegments);
+      this.reindexes.set(jobId, {
+        ...this.reindexes.get(jobId)!,
+        state: 'completed',
+        targetGeneration,
+        sourceDocumentCount: sourceDocuments.length,
+        completedAt: new Date().toISOString(),
+        error: null,
+      });
+    } catch (error) {
+      const current = this.reindexes.get(jobId);
+      if (current === undefined) {
+        return;
+      }
+      this.reindexes.set(jobId, {
+        ...current,
+        state: 'failed',
+        completedAt: new Date().toISOString(),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private restoreActiveIndex(runtime: RuntimeIndex): void {
