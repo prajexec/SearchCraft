@@ -2,19 +2,20 @@
 
 ## Scope of this document
 
-This document describes the implemented Phase 4 versioned immutable-segment indexing service. Phases 0–3 established the runtime, durable asynchronous jobs, filters, field boosts, and cursor pagination; Phase 4 adds checksummed multi-segment publication, cross-segment version resolution, and background compaction. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
+This document describes the implemented Phase 5 versioned immutable-segment indexing service. Phases 0–3 established the runtime, durable asynchronous jobs, filters, field boosts, and cursor pagination; Phase 4 adds checksummed multi-segment publication, cross-segment version resolution, and background compaction; Phase 5 adds bounded NDJSON bulk ingestion, atomic batch transactions, batched worker publication, and ingestion metrics. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
 
 ## Runtime model
 
-SearchCraft is a modular monolith. One Node.js process currently owns the HTTP server, SQLite connection, metrics registry, and structured logger. The planned indexing worker is a bounded worker loop in the same process initially. A separate worker process is a later deployment option only if measurements justify it.
+SearchCraft is a modular monolith. One Node.js process currently owns the HTTP server, SQLite connection, metrics registry, and structured logger. The indexing worker is a bounded worker loop in the same process initially. A separate worker process is a later deployment option only if measurements justify it.
 
 ```mermaid
 flowchart TB
     subgraph Process[One Node.js process]
         HTTP[HTTP layer]
+        Bulk[Bounded NDJSON bulk parser]
         Observability[Logger and metrics]
         SQLiteAccess[SQLite access]
-        Indexing[Bounded indexing worker]
+        Indexing[Bounded indexing worker and batch publisher]
         Query[Query engine and BM25]
         Maintenance[Segment compaction and validation]
     end
@@ -23,6 +24,9 @@ flowchart TB
     HTTP --> SQLiteAccess
     HTTP --> Indexing
     HTTP --> Query
+    HTTP --> Bulk
+    Bulk --> SQLiteAccess
+    Bulk --> Indexing
     HTTP -. future .-> Maintenance
     Indexing -.-> SQLiteAccess
     Query --> SQLiteAccess
@@ -39,7 +43,7 @@ flowchart TB
 
 The HTTP layer owns request IDs, route matching, request limits, status codes, JSON serialization, and error envelopes. Search algorithms and SQL statements do not belong in route handlers.
 
-Implemented routes include `/health`, `/ready`, `/metrics`, `/metrics/prometheus`, `/openapi.json`, named index management, document CRUD, and BM25 search. Job, bulk, filter, and maintenance routes will be added only with backing functionality.
+Implemented routes include `/health`, `/ready`, `/metrics`, `/metrics/prometheus`, `/openapi.json`, named index management, document CRUD, `POST /v1/indexes/{index}/documents/_bulk`, and BM25 search. Bulk requests use a bounded streaming NDJSON parser and conventional two-line action/source records; all source mutations and jobs in one request commit atomically.
 
 ### Storage
 
@@ -78,7 +82,7 @@ sequenceDiagram
     H-->>C: 200 readiness response
 ```
 
-The production document flow validates the request, commits the source mutation and indexing job in one SQLite transaction, and returns `202 Accepted`. The bounded worker claims the job, checks the latest document version, appends a checksummed immutable segment, and marks the job complete after manifest publication. Search visibility is therefore eventually consistent and observable through job/status endpoints.
+The production document flow validates the request, commits the source mutation and indexing job in one SQLite transaction, and returns `202 Accepted`. The bounded worker claims jobs in batches, checks the latest document versions, appends one checksummed immutable segment per index batch, and marks jobs complete after manifest publication. Search visibility is therefore eventually consistent and observable through job/status endpoints. Bulk request count, accepted document count, and bounded request-latency histograms use the shared metrics registry.
 
 ## Persistence boundaries
 
@@ -87,7 +91,7 @@ The initial migration creates:
 - `schema_migrations` for explicit migration tracking.
 - `indexes` for named-index metadata and active generation state.
 - `documents` for the latest durable source document version and tombstone state.
-- `indexing_jobs` for durable upsert/delete work and retry metadata.
+- `indexing_jobs` for durable upsert/delete work and retry metadata; one bulk request creates one job per document action in the same transaction.
 
 The search index lives below the configured data directory in a named index directory with a checksummed manifest and immutable JSON segments. SQLite and filesystem operations cannot share one transaction. A corrupt or incomplete active segment list falls back to a rebuild from durable source documents; successful indexing appends a new segment and atomically publishes the complete active list.
 

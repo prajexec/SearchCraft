@@ -4,6 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { performance } from 'node:perf_hooks';
 
 import type { Config } from './config';
+import { BulkRequestError, parseBulkNdjson } from './http/bulk';
 import { AppError, errorPayload } from './http/errors';
 import { openapiDocument } from './http/openapi';
 import type { IndexManager } from './indexes/index-manager';
@@ -17,7 +18,13 @@ import {
 import type { Logger } from './observability/logger';
 import type { Metrics } from './observability/metrics';
 import { FilterValidationError, parseFilters, type SearchFilters } from './query/filters';
-import { QueueSaturatedError } from './storage/documents';
+import {
+  CreateConflictError,
+  QueueSaturatedError,
+  UpdateMissingError,
+  type BulkMutation,
+  type StoredSourceDocument,
+} from './storage/documents';
 
 export interface AppDependencies {
   readonly config: Config;
@@ -357,6 +364,90 @@ async function handleRequest(
         indexVersion: result.indexVersion,
         tookMs: Number((performance.now() - startedSearchAt).toFixed(3)),
       });
+      return;
+    }
+
+    const bulkMatch = url.pathname.match(/^\/v1\/indexes\/([^/]+)\/documents\/_bulk$/);
+    if (bulkMatch !== null) {
+      ensureMethod(request, 'POST');
+      const bulkStartedAt = performance.now();
+      dependencies.metrics.increment('bulk_requests_total');
+      try {
+        const indexManager = requireIndexManager(dependencies);
+        const indexName = requireIndexName(bulkMatch[1] ?? '');
+        const index = indexManager.getIndex(indexName);
+        if (index === undefined) {
+          throw new AppError(404, 'index_not_found', `Index "${indexName}" does not exist`);
+        }
+        const contentType = request.headers['content-type'];
+        if (
+          typeof contentType !== 'string' ||
+          !contentType.toLowerCase().startsWith('application/x-ndjson')
+        ) {
+          throw new AppError(
+            415,
+            'unsupported_media_type',
+            'Bulk request bodies must use application/x-ndjson',
+          );
+        }
+
+        const mutations = await parseBulkNdjson(
+          request,
+          dependencies.config.maxBodyBytes,
+          dependencies.config.maxBulkBatchSize,
+        );
+        let stored: readonly StoredSourceDocument[];
+        try {
+          stored =
+            indexManager.bulkMutate(indexName, mutations, {
+              enqueueJob: dependencies.asynchronousIndexing === true,
+              maxPendingJobs: dependencies.config.maxPendingJobs,
+            }) ?? [];
+        } catch (error) {
+          if (error instanceof CreateConflictError) {
+            throw new AppError(409, 'bulk_create_conflict', error.message);
+          }
+          if (error instanceof UpdateMissingError) {
+            throw new AppError(409, 'bulk_update_missing', error.message);
+          }
+          throw error;
+        }
+        dependencies.metrics.increment('bulk_documents_total', stored.length);
+        const statusCode = dependencies.asynchronousIndexing === true ? 202 : 200;
+        const items = stored.map((document, index) => {
+          const mutation = mutations[index] as BulkMutation;
+          return {
+            [mutation.action]: {
+              _id: document.id,
+              status: statusCode,
+              version: document.version,
+              jobId: document.jobId,
+              deleted: document.deleted,
+              searchVisible: dependencies.asynchronousIndexing !== true,
+              ...(dependencies.asynchronousIndexing === true
+                ? {}
+                : { indexVersion: indexManager.getIndex(indexName)?.activeGeneration ?? null }),
+            },
+          };
+        });
+        sendJson(response, statusCode, {
+          errors: false,
+          items,
+          tookMs: Number((performance.now() - bulkStartedAt).toFixed(3)),
+        });
+      } catch (error) {
+        if (error instanceof BulkRequestError) {
+          throw new AppError(
+            error.statusCode,
+            error.code,
+            error.message,
+            error.line === undefined ? undefined : { line: error.line },
+          );
+        }
+        throw error;
+      } finally {
+        dependencies.metrics.observe('bulk_request_duration_ms', performance.now() - bulkStartedAt);
+      }
       return;
     }
 

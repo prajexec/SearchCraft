@@ -28,7 +28,12 @@ import {
   validateDocumentId,
   validateIndexName,
 } from './index-config';
-import { DocumentRepository, type StoredSourceDocument } from '../storage/documents';
+import {
+  DocumentRepository,
+  type BulkMutation,
+  type MutationOptions,
+  type StoredSourceDocument,
+} from '../storage/documents';
 import { IndexRepository } from '../storage/indexes';
 import { JobRepository, type IndexingJob, type JobCounts } from '../storage/jobs';
 
@@ -119,19 +124,9 @@ export class IndexManager {
     indexName: string,
     document: SearchDocument,
   ): StoredSourceDocument | undefined {
-    const runtime = this.indexes.get(indexName);
-    if (runtime === undefined) {
-      return undefined;
-    }
-    const stored = this.documentRepository.upsert(indexName, document);
-    runtime.index.upsert(document, stored.version);
-    try {
-      this.publishMutation(runtime, document.id);
-    } catch (error) {
-      this.restoreActiveIndex(runtime);
-      throw error;
-    }
-    return stored;
+    return this.bulkMutate(indexName, [
+      { action: 'index', id: document.id, fields: document.fields },
+    ])?.[0];
   }
 
   public upsertSourceDocument(
@@ -139,30 +134,19 @@ export class IndexManager {
     document: SearchDocument,
     maxPendingJobs: number,
   ): StoredSourceDocument | undefined {
-    if (!this.indexes.has(indexName)) {
-      return undefined;
-    }
-    return this.documentRepository.upsert(indexName, document, {
-      enqueueJob: true,
-      maxPendingJobs,
-    });
+    return this.bulkMutate(
+      indexName,
+      [{ action: 'index', id: document.id, fields: document.fields }],
+      {
+        enqueueJob: true,
+        maxPendingJobs,
+      },
+    )?.[0];
   }
 
   public deleteDocument(indexName: string, documentId: string): StoredSourceDocument | undefined {
-    const runtime = this.indexes.get(indexName);
-    if (runtime === undefined) {
-      return undefined;
-    }
     validateDocumentId(documentId);
-    const stored = this.documentRepository.delete(indexName, documentId);
-    runtime.index.remove(documentId, stored.version);
-    try {
-      this.publishMutation(runtime, documentId);
-    } catch (error) {
-      this.restoreActiveIndex(runtime);
-      throw error;
-    }
-    return stored;
+    return this.bulkMutate(indexName, [{ action: 'delete', id: documentId }])?.[0];
   }
 
   public deleteSourceDocument(
@@ -170,14 +154,28 @@ export class IndexManager {
     documentId: string,
     maxPendingJobs: number,
   ): StoredSourceDocument | undefined {
-    if (!this.indexes.has(indexName)) {
-      return undefined;
-    }
     validateDocumentId(documentId);
-    return this.documentRepository.delete(indexName, documentId, {
+    return this.bulkMutate(indexName, [{ action: 'delete', id: documentId }], {
       enqueueJob: true,
       maxPendingJobs,
-    });
+    })?.[0];
+  }
+
+  public bulkMutate(
+    indexName: string,
+    mutations: readonly BulkMutation[],
+    options: MutationOptions = {},
+  ): StoredSourceDocument[] | undefined {
+    const runtime = this.indexes.get(indexName);
+    if (runtime === undefined) {
+      return undefined;
+    }
+
+    const storedDocuments = this.documentRepository.mutateBatch(indexName, mutations, options);
+    if (options.enqueueJob !== true && storedDocuments.length > 0) {
+      this.applyIndexedDocuments(indexName, storedDocuments);
+    }
+    return storedDocuments;
   }
 
   public getJob(indexName: string, jobId: string): IndexingJob | undefined {
@@ -209,31 +207,60 @@ export class IndexManager {
   }
 
   public applyIndexedDocument(indexName: string, document: StoredSourceDocument): boolean {
+    return this.applyIndexedDocuments(indexName, [document]);
+  }
+
+  public applyIndexedDocuments(
+    indexName: string,
+    documents: readonly StoredSourceDocument[],
+  ): boolean {
     const runtime = this.indexes.get(indexName);
     if (runtime === undefined) {
       return false;
     }
 
-    const currentVersion = runtime.index.documentVersion(document.id);
-    if (
-      currentVersion !== undefined &&
-      (currentVersion > document.version ||
-        (currentVersion === document.version &&
-          runtime.index.isDocumentDeleted(document.id) === document.deleted))
-    ) {
-      // A retry after publication is idempotent. A stale job is normally
-      // filtered by IndexWorker, but keeping this guard here prevents an old
-      // caller from resurrecting a newer segment.
+    const latestDocuments = new Map<string, StoredSourceDocument>();
+    for (const document of documents) {
+      const existing = latestDocuments.get(document.id);
+      if (existing === undefined || document.version >= existing.version) {
+        latestDocuments.set(document.id, document);
+      }
+    }
+
+    const documentsToApply: StoredSourceDocument[] = [];
+    for (const document of latestDocuments.values()) {
+      const currentVersion = runtime.index.documentVersion(document.id);
+      if (
+        currentVersion !== undefined &&
+        (currentVersion > document.version ||
+          (currentVersion === document.version &&
+            runtime.index.isDocumentDeleted(document.id) === document.deleted))
+      ) {
+        // A retry after publication is idempotent. A stale job is normally
+        // filtered by IndexWorker, but keeping this guard here prevents an old
+        // caller from resurrecting a newer segment.
+        continue;
+      }
+      documentsToApply.push(document);
+    }
+
+    if (documentsToApply.length === 0) {
       return true;
     }
 
-    if (document.deleted) {
-      runtime.index.remove(document.id, document.version);
-    } else {
-      runtime.index.upsert(document, document.version);
+    for (const document of documentsToApply) {
+      if (document.deleted) {
+        runtime.index.remove(document.id, document.version);
+      } else {
+        runtime.index.upsert(document, document.version);
+      }
     }
+
     try {
-      this.publishMutation(runtime, document.id);
+      this.publishMutation(
+        runtime,
+        documentsToApply.map((document) => document.id),
+      );
     } catch (error) {
       this.restoreActiveIndex(runtime);
       throw error;
@@ -273,9 +300,9 @@ export class IndexManager {
     return true;
   }
 
-  private publishMutation(runtime: RuntimeIndex, documentId: string): void {
+  private publishMutation(runtime: RuntimeIndex, documentIds: string | readonly string[]): void {
     const nextGeneration = runtime.generation + 1;
-    const snapshot = runtime.index.toDeltaSnapshot(nextGeneration, documentId);
+    const snapshot = runtime.index.toDeltaSnapshot(nextGeneration, documentIds);
     const manifest = appendSegmentAtomic(
       runtime.directory,
       createManifest(runtime.metadata.name, runtime.generation, runtime.activeSegments),

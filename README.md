@@ -2,7 +2,7 @@
 
 SearchCraft is a lightweight, self-contained search indexing and query service written in strict TypeScript. It is designed as a portfolio-grade backend system that makes search-engine mechanics and operational tradeoffs visible rather than delegating them to OpenSearch or Elasticsearch.
 
-> **Current status:** Phase 4 versioned immutable segments and compaction (Phases 0–3 complete). The service exposes operational endpoints, named indexes, durable source documents, a custom Unicode-aware inverted index, global BM25 ranking across segments, filters, cursor pagination, a bounded SQLite job queue, worker retries, restart recovery, checksummed segment publication, and background compaction. Bulk ingestion, index generations, snapshots, and zero-downtime generation swaps remain later phases.
+> **Current status:** Phase 5 streaming bulk ingestion and operational metrics (Phases 0–4 complete). The service exposes operational endpoints, named indexes, durable source documents, bounded NDJSON bulk actions, a custom Unicode-aware inverted index, global BM25 ranking across segments, filters, cursor pagination, a bounded SQLite job queue, batched worker publication, restart recovery, checksummed segment publication, and background compaction. Index generations, snapshots, and zero-downtime generation swaps remain later phases.
 
 ## Why this project exists
 
@@ -20,22 +20,23 @@ The implementation will favor correctness, explicit consistency semantics, bound
 
 ## Current feature status
 
-| Capability                                              | Status                               |
-| ------------------------------------------------------- | ------------------------------------ |
-| Native Node.js HTTP server                              | Implemented                          |
-| Strict TypeScript project and reproducible npm scripts  | Implemented                          |
-| SQLite initialization and explicit migration tracking   | Implemented                          |
-| Health and readiness endpoints                          | Implemented                          |
-| JSON and Prometheus-compatible process metrics          | Implemented                          |
-| OpenAPI endpoint and checked-in specification           | Implemented for foundation endpoints |
-| Structured JSON logging and request IDs                 | Implemented                          |
-| Named indexes and document ingestion                    | Implemented asynchronously           |
-| Custom inverted index and tokenizer                     | Implemented                          |
-| BM25 ranking                                            | Implemented                          |
-| Durable asynchronous indexing worker                    | Implemented                          |
-| Filters and cursor pagination                           | Implemented                          |
-| Immutable segments and compaction                       | Implemented in Phase 4               |
-| Bulk ingestion, reindexing, snapshots, and online swaps | Planned for Phases 5–8               |
+| Capability                                             | Status                               |
+| ------------------------------------------------------ | ------------------------------------ |
+| Native Node.js HTTP server                             | Implemented                          |
+| Strict TypeScript project and reproducible npm scripts | Implemented                          |
+| SQLite initialization and explicit migration tracking  | Implemented                          |
+| Health and readiness endpoints                         | Implemented                          |
+| JSON and Prometheus-compatible process metrics         | Implemented                          |
+| OpenAPI endpoint and checked-in specification          | Implemented for foundation endpoints |
+| Structured JSON logging and request IDs                | Implemented                          |
+| Named indexes and document ingestion                   | Implemented asynchronously           |
+| Custom inverted index and tokenizer                    | Implemented                          |
+| BM25 ranking                                           | Implemented                          |
+| Durable asynchronous indexing worker                   | Implemented                          |
+| Filters and cursor pagination                          | Implemented                          |
+| Immutable segments and compaction                      | Implemented in Phase 4               |
+| Streaming NDJSON bulk ingestion and batch metrics      | Implemented in Phase 5               |
+| Reindexing, snapshots, and online generation swaps     | Planned for Phases 6–8               |
 
 ## Architecture
 
@@ -137,6 +138,16 @@ curl -sS 'http://127.0.0.1:3000/v1/indexes/products/search?q=battery&limit=20' |
 
 Production writes return `202 Accepted` after the source document and indexing job commit in SQLite. `searchVisible: false` means the worker has not necessarily published the document yet; poll the returned job or `/status`. Queue saturation returns `429` with `Retry-After: 1` and does not commit the rejected mutation.
 
+Bulk writes use bounded, atomic NDJSON batches. `index`, `create`, and `update` actions are followed by a source line; `delete` actions are metadata-only:
+
+```bash
+curl -sS -X POST http://127.0.0.1:3000/v1/indexes/products/documents/_bulk \
+  -H 'content-type: application/x-ndjson' \
+  --data-binary $'{"index":{"_id":"product-123"}}\n{"fields":{"title":"MacBook Air M1"}}\n{"delete":{"_id":"old-product"}}\n'
+```
+
+Bulk source mutations and their indexing jobs commit in one SQLite transaction. The request is rejected without partial writes when the NDJSON is invalid, the batch exceeds configured limits, a `create` conflicts, an `update` target is missing, or the bounded queue cannot admit the complete batch. Production bulk requests return `202` with one job ID per accepted action; the worker claims bounded batches and publishes one multi-document segment per index.
+
 ## Quality checks
 
 ```bash
@@ -177,7 +188,7 @@ SQLite and filesystem writes cannot share one atomic transaction. Segment files 
 ## Known limitations
 
 - JSON segments remain inspectable rather than compressed; the Phase 8 storage enhancements may introduce compressed posting lists or term-dictionary blocks.
-- Bulk NDJSON ingestion, reindexing, snapshots, and online generation swaps are not implemented yet.
+- Reindexing, snapshots, and online generation swaps are not implemented yet.
 - The current metrics registry is process-local and intentionally lightweight.
 - The current benchmark does not represent search workload behavior.
 - There is no authentication, multitenancy, or distributed rate limiting.

@@ -21,6 +21,17 @@ export interface StoredSourceDocument extends SearchDocument {
   readonly jobId: string | null;
 }
 
+export type BulkMutation =
+  | {
+      readonly action: 'index' | 'create' | 'update';
+      readonly id: string;
+      readonly fields: Record<string, FieldValue>;
+    }
+  | {
+      readonly action: 'delete';
+      readonly id: string;
+    };
+
 export interface MutationOptions {
   readonly enqueueJob?: boolean;
   readonly maxPendingJobs?: number;
@@ -30,6 +41,20 @@ export class QueueSaturatedError extends Error {
   public constructor() {
     super('The indexing queue is at capacity');
     this.name = 'QueueSaturatedError';
+  }
+}
+
+export class CreateConflictError extends Error {
+  public constructor(indexName: string, documentId: string) {
+    super(`Document "${documentId}" already exists in index "${indexName}"`);
+    this.name = 'CreateConflictError';
+  }
+}
+
+export class UpdateMissingError extends Error {
+  public constructor(indexName: string, documentId: string) {
+    super(`Document "${documentId}" is missing or deleted in index "${indexName}"`);
+    this.name = 'UpdateMissingError';
   }
 }
 
@@ -56,50 +81,11 @@ export class DocumentRepository {
     document: SearchDocument,
     options: MutationOptions = {},
   ): StoredSourceDocument {
-    const existing = this.getRow(indexName, document.id);
-    const now = new Date().toISOString();
-    const version = (existing?.version ?? 0) + 1;
-    const bodyJson = JSON.stringify({ fields: document.fields });
-    const enqueueJob = options.enqueueJob === true;
-    const jobId = enqueueJob ? randomUUID() : null;
-
-    this.database.exec('BEGIN IMMEDIATE');
-    try {
-      if (
-        enqueueJob &&
-        this.countOutstandingJobs(indexName) >= (options.maxPendingJobs ?? Number.MAX_SAFE_INTEGER)
-      ) {
-        throw new QueueSaturatedError();
-      }
-      this.database
-        .prepare(
-          `INSERT INTO documents (index_name, document_id, version, body_json, deleted, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 0, ?, ?)
-           ON CONFLICT(index_name, document_id) DO UPDATE SET
-             version = excluded.version,
-             body_json = excluded.body_json,
-             deleted = 0,
-             updated_at = excluded.updated_at`,
-        )
-        .run(indexName, document.id, version, bodyJson, existing?.created_at ?? now, now);
-      if (jobId !== null) {
-        this.insertJob(jobId, indexName, document.id, version, 'upsert', now);
-      }
-      this.database.exec('COMMIT');
-    } catch (error) {
-      this.database.exec('ROLLBACK');
-      throw error;
-    }
-
-    return {
-      id: document.id,
-      fields: document.fields,
-      version,
-      deleted: false,
-      createdAt: existing?.created_at ?? now,
-      updatedAt: now,
-      jobId,
-    };
+    return this.mutateBatch(
+      indexName,
+      [{ action: 'index', id: document.id, fields: document.fields }],
+      options,
+    )[0] as StoredSourceDocument;
   }
 
   public delete(
@@ -107,33 +93,100 @@ export class DocumentRepository {
     documentId: string,
     options: MutationOptions = {},
   ): StoredSourceDocument {
-    const existing = this.getRow(indexName, documentId);
-    const now = new Date().toISOString();
-    const version = (existing?.version ?? 0) + 1;
+    return this.mutateBatch(
+      indexName,
+      [{ action: 'delete', id: documentId }],
+      options,
+    )[0] as StoredSourceDocument;
+  }
+
+  public mutateBatch(
+    indexName: string,
+    mutations: readonly BulkMutation[],
+    options: MutationOptions = {},
+  ): StoredSourceDocument[] {
     const enqueueJob = options.enqueueJob === true;
-    const jobId = enqueueJob ? randomUUID() : null;
+    const storedDocuments: StoredSourceDocument[] = [];
 
     this.database.exec('BEGIN IMMEDIATE');
     try {
       if (
         enqueueJob &&
-        this.countOutstandingJobs(indexName) >= (options.maxPendingJobs ?? Number.MAX_SAFE_INTEGER)
+        this.countOutstandingJobs(indexName) + mutations.length >
+          (options.maxPendingJobs ?? Number.MAX_SAFE_INTEGER)
       ) {
         throw new QueueSaturatedError();
       }
-      this.database
-        .prepare(
-          `INSERT INTO documents (index_name, document_id, version, body_json, deleted, created_at, updated_at)
-           VALUES (?, ?, ?, NULL, 1, ?, ?)
-           ON CONFLICT(index_name, document_id) DO UPDATE SET
-             version = excluded.version,
-             body_json = NULL,
-             deleted = 1,
-             updated_at = excluded.updated_at`,
-        )
-        .run(indexName, documentId, version, existing?.created_at ?? now, now);
-      if (jobId !== null) {
-        this.insertJob(jobId, indexName, documentId, version, 'delete', now);
+
+      for (const mutation of mutations) {
+        const existing = this.getRow(indexName, mutation.id);
+        const now = new Date().toISOString();
+        let fields: Record<string, FieldValue>;
+        let deleted = false;
+
+        switch (mutation.action) {
+          case 'create':
+            if (existing !== undefined) {
+              throw new CreateConflictError(indexName, mutation.id);
+            }
+            fields = mutation.fields;
+            break;
+          case 'update':
+            if (existing === undefined || existing.deleted === 1) {
+              throw new UpdateMissingError(indexName, mutation.id);
+            }
+            fields = { ...this.fieldsFromRow(existing), ...mutation.fields };
+            break;
+          case 'index':
+            fields = mutation.fields;
+            break;
+          case 'delete':
+            fields = {};
+            deleted = true;
+            break;
+        }
+
+        const version = (existing?.version ?? 0) + 1;
+        const createdAt = existing?.created_at ?? now;
+        const jobId = enqueueJob ? randomUUID() : null;
+        this.database
+          .prepare(
+            `INSERT INTO documents (index_name, document_id, version, body_json, deleted, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(index_name, document_id) DO UPDATE SET
+               version = excluded.version,
+               body_json = excluded.body_json,
+               deleted = excluded.deleted,
+               updated_at = excluded.updated_at`,
+          )
+          .run(
+            indexName,
+            mutation.id,
+            version,
+            deleted ? null : JSON.stringify({ fields }),
+            deleted ? 1 : 0,
+            createdAt,
+            now,
+          );
+        if (jobId !== null) {
+          this.insertJob(
+            jobId,
+            indexName,
+            mutation.id,
+            version,
+            deleted ? 'delete' : 'upsert',
+            now,
+          );
+        }
+        storedDocuments.push({
+          id: mutation.id,
+          fields,
+          version,
+          deleted,
+          createdAt,
+          updatedAt: now,
+          jobId,
+        });
       }
       this.database.exec('COMMIT');
     } catch (error) {
@@ -141,15 +194,7 @@ export class DocumentRepository {
       throw error;
     }
 
-    return {
-      id: documentId,
-      fields: {},
-      version,
-      deleted: true,
-      createdAt: existing?.created_at ?? now,
-      updatedAt: now,
-      jobId,
-    };
+    return storedDocuments;
   }
 
   public get(indexName: string, documentId: string): StoredSourceDocument | undefined {
@@ -174,6 +219,12 @@ export class DocumentRepository {
          FROM documents WHERE index_name = ? AND document_id = ?`,
       )
       .get(indexName, documentId) as unknown as DocumentRow | undefined;
+  }
+
+  private fieldsFromRow(row: DocumentRow): Record<string, FieldValue> {
+    return row.body_json === null
+      ? {}
+      : (JSON.parse(row.body_json) as { fields: Record<string, FieldValue> }).fields;
   }
 
   private countOutstandingJobs(indexName: string): number {

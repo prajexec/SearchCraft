@@ -4,7 +4,7 @@ export const openapiDocument = {
     title: 'SearchCraft API',
     version: '0.1.0',
     description:
-      'A lightweight, local-first search indexing and query service. The implemented slice provides named indexes, durable source documents, asynchronous custom indexing, BM25 search, cursor pagination, job inspection, and operational endpoints.',
+      'A lightweight, local-first search indexing and query service. The implemented slice provides named indexes, durable source documents, streaming NDJSON bulk ingestion, asynchronous custom indexing, BM25 search, cursor pagination, job inspection, and operational endpoints.',
   },
   servers: [{ url: 'http://127.0.0.1:3000' }],
   paths: {
@@ -192,6 +192,52 @@ export const openapiDocument = {
           },
           '404': { description: 'Index not found.' },
           '429': { description: 'The bounded indexing queue is full.' },
+        },
+      },
+    },
+    '/v1/indexes/{index}/documents/_bulk': {
+      parameters: [{ $ref: '#/components/parameters/IndexName' }],
+      post: {
+        operationId: 'bulkDocuments',
+        summary: 'Ingest a bounded NDJSON document batch',
+        description:
+          'Accepts Elasticsearch-style two-line NDJSON actions. index, create, and update actions are followed by a source line; delete actions contain only metadata. The source documents and indexing jobs commit atomically as one batch.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/x-ndjson': {
+              schema: { type: 'string', format: 'binary' },
+              example:
+                '{"index":{"_id":"one"}}\n{"fields":{"title":"MacBook Air"}}\n{"delete":{"_id":"old"}}\n',
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Batch synchronously indexed.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/BulkResponse' } },
+            },
+          },
+          '202': {
+            description: 'Batch durably accepted for asynchronous indexing.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/BulkResponse' } },
+            },
+          },
+          '400': {
+            description: 'Invalid NDJSON, action, document, or document ID.',
+            content: {
+              'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } },
+            },
+          },
+          '404': { description: 'Index not found.' },
+          '409': { description: 'A create action conflicts or an update target is missing.' },
+          '413': {
+            description: 'The request body or operation count exceeds its configured limit.',
+          },
+          '415': { description: 'The request is not application/x-ndjson.' },
+          '429': { description: 'The bounded indexing queue is full for the complete batch.' },
         },
       },
     },
@@ -437,6 +483,36 @@ export const openapiDocument = {
           jobId: { type: 'string', format: 'uuid' },
           deleted: { const: true },
           searchVisible: { const: false },
+        },
+      },
+      BulkItemResult: {
+        type: 'object',
+        required: ['_id', 'status', 'version', 'jobId', 'deleted', 'searchVisible'],
+        properties: {
+          _id: { type: 'string' },
+          status: { type: 'integer' },
+          version: { type: 'integer' },
+          jobId: { type: ['string', 'null'], format: 'uuid' },
+          deleted: { type: 'boolean' },
+          searchVisible: { type: 'boolean' },
+          indexVersion: { type: ['integer', 'null'] },
+        },
+      },
+      BulkResponse: {
+        type: 'object',
+        required: ['errors', 'items', 'tookMs'],
+        properties: {
+          errors: { const: false },
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              minProperties: 1,
+              maxProperties: 1,
+              additionalProperties: { $ref: '#/components/schemas/BulkItemResult' },
+            },
+          },
+          tookMs: { type: 'number' },
         },
       },
       IndexMetadata: {

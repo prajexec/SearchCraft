@@ -21,7 +21,7 @@ SearchCraft is a lightweight, self-contained search indexing and query service. 
 | 2     | Durable asynchronous indexing and recovery                                   | Complete |
 | 3     | Filters, field boosts, and cursor pagination                                 | Complete |
 | 4     | Versioned immutable segments and compaction                                  | Complete |
-| 5     | Streaming bulk ingestion and operational metrics                             | Planned  |
+| 5     | Streaming bulk ingestion and operational metrics                             | Complete |
 | 6     | Generations, reindexing, snapshots, and online swaps                         | Planned  |
 | 7     | Reproducible benchmarks, CI, and engineering polish                          | Planned  |
 | 8     | Optional advanced features selected from measured needs                      | Planned  |
@@ -90,9 +90,21 @@ Phase 3 acceptance criteria are verified by filter parser, inverted-index, and A
 
 Phase 4 acceptance criteria are verified by the immutable-segment, integrity, compaction, and existing search/recovery tests.
 
+## Phase 5 acceptance criteria
+
+- `POST /v1/indexes/:name/documents/_bulk` accepts `application/x-ndjson` with bounded streaming parsing.
+- Bulk actions support `index`, `create`, `update`, and `delete` using the two-line action/source format; update merges fields into the current source document.
+- Request body bytes and logical operation count are bounded by `maxBodyBytes` and `maxBulkBatchSize`.
+- A valid bulk request commits all source mutations and their indexing jobs in one SQLite transaction, with queue admission performed for the complete batch.
+- Async workers claim bounded job batches and publish one multi-document immutable segment per index; synchronous bulk requests publish one batch segment directly.
+- Parse, validation, create-conflict, missing-update, and queue-saturation failures do not partially commit a bulk request.
+- Bulk request count, accepted document count, and bounded ingestion latency histograms are exposed through JSON and Prometheus metrics.
+- The OpenAPI specification documents the NDJSON endpoint, action format, limits, responses, and failure statuses.
+
+Phase 5 acceptance criteria are verified by streaming parser, bulk API, transaction, worker-batch, metrics, and OpenAPI tests.
+
 ## Subsequent roadmap
 
-- **Phase 5:** Streaming bulk ingestion (`POST /indexes/:name/documents/_bulk` with NDJSON) and bulk operational metrics.
 - **Phase 6:** Index generations, offline reindexing from the durable SQLite source, snapshot backups, and zero-downtime generation swaps.
 - **Phase 7:** A reproducible benchmark suite for indexing throughput and search latency, automated CI workflows, and release polish.
 - **Phase 8:** Advanced enhancements selected from measured needs, such as phrase queries, compressed posting lists, or term-dictionary blocks.
@@ -110,7 +122,7 @@ Every phase must finish with:
 
 ## Known gaps at project start
 
-- Bulk NDJSON ingestion, index generations, snapshots, and online generation swaps are not implemented yet.
+- Index generations, snapshots, and online generation swaps are not implemented yet.
 - No external benchmark result exists; the current benchmark script measures only the foundation health endpoint.
 - No authentication or multitenancy is planned for the local-first trust boundary.
 - No license has been selected, so the repository is currently marked `UNLICENSED`.

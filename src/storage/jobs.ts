@@ -130,8 +130,13 @@ export class JobRepository {
   }
 
   public claimNext(now: Date, leaseMs: number): IndexingJob | undefined {
+    return this.claimBatch(now, leaseMs, 1)[0];
+  }
+
+  public claimBatch(now: Date, leaseMs: number, limit: number): IndexingJob[] {
     const nowIso = now.toISOString();
     const staleBefore = new Date(now.getTime() - leaseMs).toISOString();
+    const claimedJobs: IndexingJob[] = [];
     this.database.exec('BEGIN IMMEDIATE');
     try {
       this.database
@@ -142,27 +147,26 @@ export class JobRepository {
         )
         .run(nowIso, staleBefore);
 
-      const row = this.database
-        .prepare(
-          `SELECT ${JOB_COLUMNS} FROM indexing_jobs
-           WHERE status = 'pending' AND available_at <= ?
-           ORDER BY available_at, created_at LIMIT 1`,
-        )
-        .get(nowIso) as unknown as JobRow | undefined;
-      if (row === undefined) {
-        this.database.exec('COMMIT');
-        return undefined;
-      }
-
-      const attempts = row.attempts + 1;
-      this.database
-        .prepare(
+      if (limit > 0) {
+        const rows = this.database
+          .prepare(
+            `SELECT ${JOB_COLUMNS} FROM indexing_jobs
+             WHERE status = 'pending' AND available_at <= ?
+             ORDER BY available_at, created_at LIMIT ?`,
+          )
+          .all(nowIso, limit) as unknown as JobRow[];
+        const update = this.database.prepare(
           `UPDATE indexing_jobs SET status = 'processing', attempts = ?, claimed_at = ?
            WHERE job_id = ? AND status = 'pending'`,
-        )
-        .run(attempts, nowIso, row.job_id);
+        );
+        for (const row of rows) {
+          const attempts = row.attempts + 1;
+          update.run(attempts, nowIso, row.job_id);
+          claimedJobs.push(toJob({ ...row, status: 'processing', attempts, claimed_at: nowIso }));
+        }
+      }
       this.database.exec('COMMIT');
-      return toJob({ ...row, status: 'processing', attempts, claimed_at: nowIso });
+      return claimedJobs;
     } catch (error) {
       this.database.exec('ROLLBACK');
       throw error;
@@ -170,12 +174,29 @@ export class JobRepository {
   }
 
   public complete(jobId: string): void {
-    this.database
-      .prepare(
-        `UPDATE indexing_jobs SET status = 'completed', completed_at = ?, claimed_at = NULL
-         WHERE job_id = ? AND status = 'processing'`,
-      )
-      .run(new Date().toISOString(), jobId);
+    this.completeMany([jobId]);
+  }
+
+  public completeMany(jobIds: readonly string[]): void {
+    const uniqueJobIds = [...new Set(jobIds)];
+    if (uniqueJobIds.length === 0) {
+      return;
+    }
+
+    const placeholders = uniqueJobIds.map(() => '?').join(', ');
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      this.database
+        .prepare(
+          `UPDATE indexing_jobs SET status = 'completed', completed_at = ?, claimed_at = NULL
+           WHERE status = 'processing' AND job_id IN (${placeholders})`,
+        )
+        .run(new Date().toISOString(), ...uniqueJobIds);
+      this.database.exec('COMMIT');
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   public pruneTerminal(indexName: string, maxHistory: number): void {

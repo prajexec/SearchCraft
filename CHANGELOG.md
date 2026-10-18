@@ -26,7 +26,11 @@ All notable changes to SearchCraft are recorded here.
 - Cross-segment document-version resolution, tombstones, and global BM25 statistics.
 - Checksummed segment and manifest validation with safe relative-path enforcement.
 - Threshold-triggered immutable segment compaction with retired-file cleanup.
+- Streaming `application/x-ndjson` bulk ingestion with index, create, update, and delete actions.
+- Atomic bulk source-document and indexing-job transactions with bounded queue admission.
+- Batched worker claims and one multi-document segment publication per index.
+- Bulk request, document, and latency metrics with OpenAPI coverage.
 
 ### Not yet implemented
 
-- Bulk NDJSON ingestion, reindexing, and snapshots.
+- Reindexing, snapshots, and online generation swaps.

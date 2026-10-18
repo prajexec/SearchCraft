@@ -339,41 +339,49 @@ export class InvertedIndex {
     return this.snapshotForDocuments(generation, documents, this.postings);
   }
 
-  /** Serialize only one mutation so normal indexing never rewrites old data. */
-  public toDeltaSnapshot(generation: number, documentId: string): SegmentSnapshot {
-    const document = this.documents.get(documentId);
-    if (document !== undefined) {
-      const filteredPostings = new Map<string, Map<string, Posting>>();
-      for (const [key, postingMap] of this.postings) {
-        const posting = postingMap.get(documentId);
-        if (posting !== undefined) {
-          filteredPostings.set(key, new Map([[documentId, posting]]));
-        }
+  /** Serialize one or more mutations so normal indexing never rewrites old data. */
+  public toDeltaSnapshot(
+    generation: number,
+    documentIds: string | readonly string[],
+  ): SegmentSnapshot {
+    const sortedIds = [...(typeof documentIds === 'string' ? [documentIds] : documentIds)].sort(
+      compareText,
+    );
+    const ids = [...new Set(sortedIds)];
+    const documents: SerializedDocument[] = [];
+    const selectedIds = new Set(ids);
+
+    for (const documentId of ids) {
+      const document = this.documents.get(documentId);
+      if (document !== undefined) {
+        documents.push(serializedDocument(document));
+        continue;
       }
-      return this.snapshotForDocuments(
-        generation,
-        [serializedDocument(document)],
-        filteredPostings,
-      );
+
+      const version = this.tombstones.get(documentId);
+      if (version === undefined) {
+        throw new Error(`document "${documentId}" is not present in the index`);
+      }
+      documents.push({
+        id: documentId,
+        version,
+        deleted: true,
+        fields: {},
+        fieldLengths: {},
+      });
     }
 
-    const version = this.tombstones.get(documentId);
-    if (version === undefined) {
-      throw new Error(`document "${documentId}" is not present in the index`);
+    const filteredPostings = new Map<string, Map<string, Posting>>();
+    for (const [key, postingMap] of this.postings) {
+      const selectedPostings = [...postingMap.entries()].filter(([documentId]) =>
+        selectedIds.has(documentId),
+      );
+      if (selectedPostings.length > 0) {
+        filteredPostings.set(key, new Map(selectedPostings));
+      }
     }
-    return this.snapshotForDocuments(
-      generation,
-      [
-        {
-          id: documentId,
-          version,
-          deleted: true,
-          fields: {},
-          fieldLengths: {},
-        },
-      ],
-      new Map(),
-    );
+
+    return this.snapshotForDocuments(generation, documents, filteredPostings);
   }
 
   private removeDocumentData(documentId: string): void {

@@ -12,6 +12,7 @@ test('loadConfig applies safe defaults and resolves the data directory', () => {
   assert.equal(config.host, '127.0.0.1');
   assert.equal(config.port, 3000);
   assert.equal(config.maxBodyBytes, 1_048_576);
+  assert.equal(config.maxBulkBatchSize, 1_000);
   assert.match(config.dataDir, /SearchCraft[\\/]data$/i);
   assert.match(config.dbPath, /searchcraft\.sqlite$/);
 });
@@ -24,6 +25,10 @@ test('loadConfig rejects invalid numeric limits', () => {
   assert.throws(
     () => loadConfig({ SEARCHCRAFT_MAX_QUERY_LENGTH: 'not-a-number' }),
     /SEARCHCRAFT_MAX_QUERY_LENGTH must be a positive integer/,
+  );
+  assert.throws(
+    () => loadConfig({ SEARCHCRAFT_MAX_BULK_BATCH_SIZE: '0' }),
+    /SEARCHCRAFT_MAX_BULK_BATCH_SIZE must be a positive integer/,
   );
 });
 

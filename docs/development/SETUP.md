@@ -21,21 +21,21 @@ The migration command creates `data/searchcraft.sqlite` by default. The `data/` 
 
 Copy `.env.example` into your shell environment as needed. The current server reads environment variables directly; it does not load `.env` files implicitly.
 
-| Variable                              | Default                         | Purpose                             |
-| ------------------------------------- | ------------------------------- | ----------------------------------- |
-| `SEARCHCRAFT_HOST`                    | `127.0.0.1`                     | Bind address                        |
-| `SEARCHCRAFT_PORT`                    | `3000`                          | HTTP port                           |
-| `SEARCHCRAFT_DATA_DIR`                | `./data`                        | Runtime data directory              |
-| `SEARCHCRAFT_DB_PATH`                 | `<data dir>/searchcraft.sqlite` | SQLite database path                |
-| `SEARCHCRAFT_MAX_BODY_BYTES`          | `1048576`                       | Maximum declared request body       |
-| `SEARCHCRAFT_MAX_QUERY_LENGTH`        | `1000`                          | Maximum query string length         |
-| `SEARCHCRAFT_MAX_BULK_BATCH_SIZE`     | `1000`                          | Maximum future bulk-operation batch |
-| `SEARCHCRAFT_MAX_PENDING_JOBS`        | `10000`                         | Pending/processing job limit        |
-| `SEARCHCRAFT_WORKER_POLL_INTERVAL_MS` | `50`                            | Worker idle poll interval           |
-| `SEARCHCRAFT_JOB_LEASE_MS`            | `30000`                         | Processing lease before recovery    |
-| `SEARCHCRAFT_MAX_JOB_ATTEMPTS`        | `5`                             | Attempts before terminal failure    |
-| `SEARCHCRAFT_MAX_JOB_HISTORY`         | `10000`                         | Retained terminal jobs per state    |
-| `SEARCHCRAFT_LOG_LEVEL`               | `info`                          | `debug`, `info`, `warn`, or `error` |
+| Variable                              | Default                         | Purpose                                              |
+| ------------------------------------- | ------------------------------- | ---------------------------------------------------- |
+| `SEARCHCRAFT_HOST`                    | `127.0.0.1`                     | Bind address                                         |
+| `SEARCHCRAFT_PORT`                    | `3000`                          | HTTP port                                            |
+| `SEARCHCRAFT_DATA_DIR`                | `./data`                        | Runtime data directory                               |
+| `SEARCHCRAFT_DB_PATH`                 | `<data dir>/searchcraft.sqlite` | SQLite database path                                 |
+| `SEARCHCRAFT_MAX_BODY_BYTES`          | `1048576`                       | Maximum declared and streamed request body           |
+| `SEARCHCRAFT_MAX_QUERY_LENGTH`        | `1000`                          | Maximum query string length                          |
+| `SEARCHCRAFT_MAX_BULK_BATCH_SIZE`     | `1000`                          | Maximum bulk operations per request and worker claim |
+| `SEARCHCRAFT_MAX_PENDING_JOBS`        | `10000`                         | Pending/processing job limit                         |
+| `SEARCHCRAFT_WORKER_POLL_INTERVAL_MS` | `50`                            | Worker idle poll interval                            |
+| `SEARCHCRAFT_JOB_LEASE_MS`            | `30000`                         | Processing lease before recovery                     |
+| `SEARCHCRAFT_MAX_JOB_ATTEMPTS`        | `5`                             | Attempts before terminal failure                     |
+| `SEARCHCRAFT_MAX_JOB_HISTORY`         | `10000`                         | Retained terminal jobs per state                     |
+| `SEARCHCRAFT_LOG_LEVEL`               | `info`                          | `debug`, `info`, `warn`, or `error`                  |
 
 ## Run
 
