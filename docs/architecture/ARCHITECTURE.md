@@ -2,7 +2,7 @@
 
 ## Scope of this document
 
-This document describes the implemented Phase 7 versioned immutable-segment indexing service. Phases 0–3 established the runtime, durable asynchronous jobs, filters, field boosts, and cursor pagination; Phase 4 adds checksummed multi-segment publication, cross-segment version resolution, and background compaction; Phase 5 adds bounded NDJSON bulk ingestion, atomic batch transactions, batched worker publication, and ingestion metrics; Phase 6 adds online target-generation reindexing, atomic swaps, and validated snapshot archives; Phase 7 adds reproducible workload measurement and CI checks. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
+This document describes the implemented Phase 8 versioned immutable-segment indexing service. Phases 0–3 established the runtime, durable asynchronous jobs, filters, field boosts, and cursor pagination; Phase 4 adds checksummed multi-segment publication, cross-segment version resolution, and background compaction; Phase 5 adds bounded NDJSON bulk ingestion, atomic batch transactions, batched worker publication, and ingestion metrics; Phase 6 adds online target-generation reindexing, atomic swaps, and validated snapshot archives; Phase 7 adds reproducible workload measurement and CI checks; Phase 8 adds phrase matching, compressed positions, and term-dictionary blocks. Future functionality is labelled explicitly; diagrams must be updated when planned boundaries become real behavior.
 
 ## Runtime model
 
@@ -16,7 +16,7 @@ flowchart TB
         Observability[Logger and metrics]
         SQLiteAccess[SQLite access]
         Indexing[Bounded indexing worker and batch publisher]
-        Query[Query engine and BM25]
+        Query[Query engine, BM25, and phrases]
         Maintenance[Reindexing, compaction, snapshots, and validation]
     end
 

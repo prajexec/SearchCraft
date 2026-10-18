@@ -7,6 +7,8 @@ import type {
   SerializedTerm,
   SegmentSnapshot,
 } from './segment';
+import { decodePositions, encodePositions } from './compression';
+import { buildTermDictionaryBlocks } from './term-dictionary';
 import { tokenize } from './tokenizer';
 
 interface Posting {
@@ -43,6 +45,11 @@ export interface SearchPage {
 export interface SearchCursor {
   readonly score: number;
   readonly id: string;
+}
+
+export interface SearchOptions {
+  readonly phrase?: boolean;
+  readonly slop?: number;
 }
 
 export class QueryLimitError extends Error {
@@ -104,6 +111,35 @@ function compareSegmentDocuments(
     candidate.version > current.document.version ||
     (candidate.version === current.document.version && order >= current.order)
   );
+}
+
+function matchesPhrase(postings: readonly Posting[], slop: number): boolean {
+  if (postings.length === 0) {
+    return false;
+  }
+  let candidates = postings[0]!.positions.map((position) => ({ position, slop: 0 }));
+  for (const posting of postings.slice(1)) {
+    const nextCandidates: Array<{ readonly position: number; readonly slop: number }> = [];
+    for (const candidate of candidates) {
+      for (const position of posting.positions) {
+        if (position <= candidate.position) {
+          continue;
+        }
+        const nextSlop = candidate.slop + position - candidate.position - 1;
+        if (nextSlop <= slop) {
+          nextCandidates.push({ position, slop: nextSlop });
+        }
+        if (position - candidate.position - 1 > slop) {
+          break;
+        }
+      }
+    }
+    if (nextCandidates.length === 0) {
+      return false;
+    }
+    candidates = nextCandidates;
+  }
+  return candidates.length > 0;
 }
 
 export class InvertedIndex {
@@ -172,7 +208,13 @@ export class InvertedIndex {
             continue;
           }
           const postingMap = index.postings.get(key) ?? new Map<string, Posting>();
-          postingMap.set(posting.documentId, posting);
+          postingMap.set(posting.documentId, {
+            ...posting,
+            positions:
+              posting.positionsEncoded === undefined
+                ? (posting.positions ?? [])
+                : decodePositions(posting.positionsEncoded, posting.termFrequency),
+          });
           index.postings.set(key, postingMap);
         }
       }
@@ -241,10 +283,11 @@ export class InvertedIndex {
     limit: number,
     cursor: SearchCursor | undefined,
     filters: SearchFilters = {},
+    options: SearchOptions = {},
   ): SearchPage {
-    const queryTerms = [
-      ...new Set(tokenize(query, this.config.maxTokenLength).map((token) => token.term)),
-    ];
+    const tokenTerms = tokenize(query, this.config.maxTokenLength).map((token) => token.term);
+    const phrase = options.phrase === true;
+    const queryTerms = phrase ? tokenTerms : [...new Set(tokenTerms)];
     if (queryTerms.length === 0) {
       throw new QueryLimitError('The query contains no searchable terms');
     }
@@ -252,19 +295,53 @@ export class InvertedIndex {
     if (queryTerms.length > maxQueryTerms) {
       throw new QueryLimitError(`The query contains more than ${maxQueryTerms} searchable terms`);
     }
+    const slop = options.slop ?? 0;
+    if (!Number.isSafeInteger(slop) || slop < 0 || slop > 100) {
+      throw new QueryLimitError('Phrase slop must be an integer between 0 and 100');
+    }
     const scores = new Map<string, number>();
     const averageLengths = new Map<string, number>();
     for (const fieldName of Object.keys(this.config.searchableFields)) {
       averageLengths.set(fieldName, averageLength(this.documents.values(), fieldName));
     }
 
-    for (const term of queryTerms) {
-      for (const [fieldName, fieldConfig] of Object.entries(this.config.searchableFields)) {
-        const postingMap = this.postings.get(termKey(fieldName, term));
-        if (postingMap === undefined) {
-          continue;
+    for (const [fieldName, fieldConfig] of Object.entries(this.config.searchableFields)) {
+      const postingMaps = queryTerms.map((term) => this.postings.get(termKey(fieldName, term)));
+      if (postingMaps.some((postingMap) => postingMap === undefined)) {
+        continue;
+      }
+      if (phrase) {
+        const firstPostingMap = postingMaps[0]!;
+        for (const documentId of firstPostingMap.keys()) {
+          const postings = postingMaps.map((postingMap) => postingMap!.get(documentId));
+          if (
+            postings.some((posting) => posting === undefined) ||
+            !matchesPhrase(postings as Posting[], slop)
+          ) {
+            continue;
+          }
+          const document = this.documents.get(documentId);
+          if (document === undefined || !matchesFilters(document.fields, filters)) {
+            continue;
+          }
+          for (const [index, posting] of (postings as Posting[]).entries()) {
+            const score = bm25Score({
+              termFrequency: posting.termFrequency,
+              documentFrequency: postingMaps[index]!.size,
+              documentCount: this.documents.size,
+              documentLength: document.fieldLengths[fieldName] ?? 0,
+              averageDocumentLength: averageLengths.get(fieldName) ?? 0,
+              k1: 1.2,
+              b: 0.75,
+            });
+            scores.set(documentId, (scores.get(documentId) ?? 0) + score * fieldConfig.boost);
+          }
         }
-        for (const posting of postingMap.values()) {
+        continue;
+      }
+
+      for (const termPostingMap of postingMaps) {
+        for (const posting of termPostingMap!.values()) {
           const document = this.documents.get(posting.documentId);
           if (
             document === undefined ||
@@ -275,7 +352,7 @@ export class InvertedIndex {
           }
           const score = bm25Score({
             termFrequency: posting.termFrequency,
-            documentFrequency: postingMap.size,
+            documentFrequency: termPostingMap!.size,
             documentCount: this.documents.size,
             documentLength: document.fieldLengths[fieldName] ?? 0,
             averageDocumentLength: averageLengths.get(fieldName) ?? 0,
@@ -416,15 +493,23 @@ export class InvertedIndex {
       const separator = key.indexOf('\u0000');
       const field = key.slice(0, separator);
       const term = key.slice(separator + 1);
-      const postings: SerializedPosting[] = [...postingMap.values()].sort((left, right) =>
-        compareText(left.documentId, right.documentId),
-      );
+      const postings: SerializedPosting[] = [...postingMap.values()]
+        .sort((left, right) => compareText(left.documentId, right.documentId))
+        .map((posting) => ({
+          documentId: posting.documentId,
+          documentVersion: posting.documentVersion,
+          termFrequency: posting.termFrequency,
+          positionsEncoded: encodePositions(posting.positions),
+        }));
       if (postings.length > 0) {
         terms.push({ field, term, postings });
       }
     }
     terms.sort((left, right) =>
       compareText(`${left.field}\u0000${left.term}`, `${right.field}\u0000${right.term}`),
+    );
+    const termBlocks = buildTermDictionaryBlocks(
+      terms.map((term) => termKey(term.field, term.term)),
     );
     return {
       magic: 'SEARCHCRAFT_SEGMENT',
@@ -434,6 +519,7 @@ export class InvertedIndex {
       createdAt: new Date().toISOString(),
       documents,
       terms,
+      termBlocks,
     };
   }
 }

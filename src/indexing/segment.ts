@@ -3,6 +3,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 
 import type { FieldValue } from '../indexes/index-config';
+import { decodePositions } from './compression';
+import { validateTermDictionaryBlocks, type TermDictionaryBlock } from './term-dictionary';
 
 export interface SerializedDocument {
   readonly id: string;
@@ -16,7 +18,8 @@ export interface SerializedPosting {
   readonly documentId: string;
   readonly documentVersion: number;
   readonly termFrequency: number;
-  readonly positions: readonly number[];
+  readonly positions?: readonly number[];
+  readonly positionsEncoded?: string;
 }
 
 export interface SerializedTerm {
@@ -38,6 +41,7 @@ export interface SegmentSnapshot {
   readonly createdAt: string;
   readonly documents: readonly SerializedDocument[];
   readonly terms: readonly SerializedTerm[];
+  readonly termBlocks?: readonly TermDictionaryBlock[];
   readonly checksum?: string;
 }
 
@@ -83,6 +87,7 @@ function snapshotPayload(snapshot: SegmentSnapshot): Omit<SegmentSnapshot, 'chec
     createdAt: snapshot.createdAt,
     documents: snapshot.documents,
     terms: snapshot.terms,
+    ...(snapshot.termBlocks === undefined ? {} : { termBlocks: snapshot.termBlocks }),
   };
 }
 
@@ -194,13 +199,30 @@ function validPosting(posting: unknown): posting is SerializedPosting {
   if (!isRecord(posting)) {
     return false;
   }
-  return (
+  if (
     typeof posting.documentId === 'string' &&
     isFiniteSafeInteger(posting.documentVersion, 1) &&
-    isFiniteSafeInteger(posting.termFrequency, 1) &&
-    Array.isArray(posting.positions) &&
-    posting.positions.every((position) => isFiniteSafeInteger(position))
-  );
+    isFiniteSafeInteger(posting.termFrequency, 1)
+  ) {
+    const hasPositions = Array.isArray(posting.positions);
+    const hasEncodedPositions = typeof posting.positionsEncoded === 'string';
+    if (hasPositions === hasEncodedPositions) {
+      return false;
+    }
+    try {
+      const positions = hasEncodedPositions
+        ? decodePositions(posting.positionsEncoded as string, posting.termFrequency)
+        : posting.positions;
+      return (
+        Array.isArray(positions) &&
+        positions.length === posting.termFrequency &&
+        positions.every((position) => isFiniteSafeInteger(position))
+      );
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 function validTerm(term: unknown): term is SerializedTerm {
@@ -216,7 +238,15 @@ function validTerm(term: unknown): term is SerializedTerm {
       return false;
     }
     documentIds.add(posting.documentId);
-    return posting.positions.length === 0 || posting.positions.length === posting.termFrequency;
+    try {
+      const positions =
+        posting.positionsEncoded === undefined
+          ? (posting.positions ?? [])
+          : decodePositions(posting.positionsEncoded, posting.termFrequency);
+      return positions.length === posting.termFrequency;
+    } catch {
+      return false;
+    }
   });
 }
 
@@ -233,6 +263,20 @@ function validSnapshotStructure(snapshot: Partial<SegmentSnapshot>): snapshot is
     !snapshot.terms.every(validTerm)
   ) {
     return false;
+  }
+
+  if (snapshot.termBlocks !== undefined) {
+    try {
+      validateTermDictionaryBlocks(snapshot.termBlocks);
+    } catch {
+      return false;
+    }
+    if (
+      snapshot.termBlocks.reduce((total, block) => total + block.length, 0) !==
+      snapshot.terms.length
+    ) {
+      return false;
+    }
   }
 
   const documentVersions = new Map<string, number>();

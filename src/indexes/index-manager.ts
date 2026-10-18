@@ -8,6 +8,7 @@ import {
   InvertedIndex,
   type SearchCursor,
   type SearchPage,
+  type SearchOptions,
   decodeCursor,
 } from '../indexing/inverted-index';
 import {
@@ -289,6 +290,7 @@ export class IndexManager {
     limit: number,
     cursorValue: string | undefined,
     filters: SearchFilters = {},
+    options: SearchOptions = {},
   ): SearchResponse | undefined {
     const runtime = this.indexes.get(indexName);
     if (runtime === undefined) {
@@ -300,7 +302,7 @@ export class IndexManager {
       throw new Error('invalid_cursor');
     }
     return {
-      page: runtime.index.search(query, limit, cursor, filters),
+      page: runtime.index.search(query, limit, cursor, filters, options),
       indexVersion: runtime.generation,
     };
   }

@@ -24,7 +24,7 @@ SearchCraft is a lightweight, self-contained search indexing and query service. 
 | 5     | Streaming bulk ingestion and operational metrics                             | Complete |
 | 6     | Generations, reindexing, snapshots, and online swaps                         | Complete |
 | 7     | Reproducible benchmarks, CI, and engineering polish                          | Complete |
-| 8     | Optional advanced features selected from measured needs                      | Planned  |
+| 8     | Phrase queries, compressed postings, and term dictionary blocks              | Complete |
 
 ## Phase 0 acceptance criteria
 
@@ -123,9 +123,19 @@ Phase 6 acceptance criteria are verified by reindex API/generation-swap and snap
 
 Phase 7 acceptance criteria are verified by the benchmark smoke run and the checked-in CI workflow.
 
+## Phase 8 acceptance criteria
+
+- Phrase searches use posting positions for exact ordered matches and bounded slop matches, with deterministic filtering, totals, ranking, and API validation.
+- Newly written postings use validated VByte delta-gap position encoding while readers retain compatibility with legacy uncompressed positions.
+- Segments contain bounded sorted term-dictionary blocks with shared-prefix metadata and binary block lookup validation.
+- Corrupt compressed positions and malformed dictionary metadata are rejected before a segment becomes active.
+- Unit, API, segment round-trip, and backward-compatibility tests protect the advanced search and storage formats.
+
+Phase 8 acceptance criteria are verified by phrase-search, compression, term-dictionary, segment-integrity, and full regression tests.
+
 ## Subsequent roadmap
 
-- **Phase 8:** Advanced enhancements selected from measured needs, such as phrase queries, compressed posting lists, or term-dictionary blocks.
+There are no remaining planned milestones. Further optimization should be selected from new benchmark evidence.
 
 ## Required evidence for each phase
 
@@ -140,6 +150,5 @@ Every phase must finish with:
 
 ## Known gaps at project start
 
-- Advanced search enhancements selected from measurement are not implemented yet.
 - No authentication or multitenancy is planned for the local-first trust boundary.
 - No license has been selected, so the repository is currently marked `UNLICENSED`.

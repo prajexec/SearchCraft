@@ -2,7 +2,7 @@
 
 SearchCraft is a lightweight, self-contained search indexing and query service written in strict TypeScript. It is designed as a portfolio-grade backend system that makes search-engine mechanics and operational tradeoffs visible rather than delegating them to OpenSearch or Elasticsearch.
 
-> **Current status:** Phase 7 benchmarks, CI, and engineering polish (Phases 0–6 complete). The service exposes operational endpoints, named indexes, durable source documents, bounded NDJSON bulk actions, online generation reindexing, validated snapshot archives, a custom Unicode-aware inverted index, global BM25 ranking across segments, filters, cursor pagination, a bounded SQLite job queue, batched worker publication, restart recovery, checksummed segment publication, and background compaction. Advanced phrase and storage-compression features remain Phase 8 work.
+> **Current status:** Phase 8 advanced search and storage features complete. The service exposes operational endpoints, named indexes, durable source documents, bounded NDJSON bulk actions, exact/sloppy phrase queries, VByte-compressed posting positions, bounded prefix term-dictionary blocks, online generation reindexing, validated snapshot archives, a custom Unicode-aware inverted index, global BM25 ranking across segments, filters, cursor pagination, a bounded SQLite job queue, batched worker publication, restart recovery, checksummed segment publication, and background compaction.
 
 ## Why this project exists
 
@@ -39,7 +39,7 @@ The implementation will favor correctness, explicit consistency semantics, bound
 | Online reindexing and generation swaps                 | Implemented in Phase 6               |
 | Snapshot archives and restore tooling                  | Implemented in Phase 6               |
 | Reproducible workload benchmark and CI                 | Implemented in Phase 7               |
-| Phrase queries and index compression                   | Planned for Phase 8                  |
+| Phrase queries and index compression                   | Implemented in Phase 8               |
 
 ## Architecture
 
@@ -205,10 +205,9 @@ SQLite and filesystem writes cannot share one atomic transaction. Segment files 
 
 ## Known limitations
 
-- JSON segments remain inspectable rather than compressed; the Phase 8 storage enhancements may introduce compressed posting lists or term-dictionary blocks.
-- Phrase queries, posting-list compression, and prefix term dictionary blocks are not implemented yet.
+- JSON segments remain inspectable, though posting positions are VByte-compressed and term metadata is organized into bounded dictionary blocks.
 - The current metrics registry is process-local and intentionally lightweight.
-- The current benchmark does not represent search workload behavior.
+- The current benchmark does not represent concurrent production traffic or remote-client behavior.
 - There is no authentication, multitenancy, or distributed rate limiting.
 - The project is marked `UNLICENSED` until a license decision is made.
 

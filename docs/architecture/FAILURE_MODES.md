@@ -1,6 +1,6 @@
 # Failure Modes
 
-This document distinguishes implemented asynchronous indexing, Phase 5 bulk ingestion, Phase 6 generation/snapshot maintenance, and planned advanced search behavior.
+This document distinguishes implemented asynchronous indexing, Phase 5 bulk ingestion, Phase 6 generation/snapshot maintenance, and Phase 8 advanced search/storage behavior.
 
 ## Implemented behavior
 
@@ -40,6 +40,8 @@ Bulk requests are parsed from incoming chunks with a bounded line buffer. The pa
 The worker claims bounded job batches and groups them by index so the current documents can be published through one multi-document immutable segment per group. Stale jobs remain safely superseded by the latest source version.
 
 Online reindexing builds a complete target generation from durable non-deleted source documents, validates the segment, atomically publishes a one-segment manifest, and only then swaps the in-memory reader and SQLite active-generation metadata. Snapshot creation uses SQLite `VACUUM INTO` and active manifest references; restore validates all archive contents before staging and replacing the target active index files. Restore is an operator action and requires the service to be stopped.
+
+Phrase queries reject invalid boolean/slop parameters before lookup and use decoded posting positions for ordered exact or bounded-gap matches. Compressed positions and term-dictionary metadata are validated with the segment checksum and structural checks; malformed encodings cannot become active.
 
 ## Implemented asynchronous failures
 

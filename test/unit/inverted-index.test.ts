@@ -167,3 +167,24 @@ test('global BM25 statistics exclude deleted and superseded documents across seg
     reference.search('shared fresh', 10, undefined),
   );
 });
+
+test('phrase search uses token positions for exact order and bounded slop', () => {
+  const index = new InvertedIndex('products', config);
+  index.upsert({ id: 'exact', fields: { title: 'quick brown fox' } }, 1);
+  index.upsert({ id: 'sloppy', fields: { title: 'quick agile brown fox' } }, 1);
+  index.upsert({ id: 'reversed', fields: { title: 'brown quick fox' } }, 1);
+  index.upsert(
+    { id: 'other-field', fields: { title: 'unrelated', description: 'quick brown' } },
+    1,
+  );
+
+  const exact = index.search('quick brown', 10, undefined, {}, { phrase: true });
+  assert.deepEqual(exact.hits.map((hit) => hit.id).sort(), ['exact', 'other-field']);
+  assert.equal(index.search('quick brown', 10, undefined, {}, { phrase: true }).totalHits, 2);
+  assert.equal(
+    index.search('quick brown', 10, undefined, {}, { phrase: true, slop: 1 }).totalHits,
+    3,
+  );
+  assert.equal(index.search('brown quick', 10, undefined, {}, { phrase: true }).totalHits, 1);
+  assert.equal(index.search('quick brown', 10, undefined).totalHits, 4);
+});

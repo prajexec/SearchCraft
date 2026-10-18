@@ -33,7 +33,10 @@ All notable changes to SearchCraft are recorded here.
 - Background online reindexing with atomic target-generation manifest swaps.
 - Validated gzip snapshot archives containing SQLite and active index segments, with restore tooling.
 - Reproducible bulk-throughput and BM25-latency benchmark output plus pull-request/main CI checks.
+- Exact and bounded-slop phrase queries using token positions.
+- VByte delta-gap compression for newly written posting positions.
+- Bounded sorted term-dictionary blocks with shared-prefix metadata and binary lookup.
 
 ### Not yet implemented
 
-- Phrase queries, posting-list compression, and prefix term dictionary blocks.
+- No additional planned milestones; future optimizations remain measurement-driven.

@@ -34,6 +34,10 @@ test('checksummed segments and manifests round-trip into an active reader', (t) 
   const { directory, written, manifest, path } = segmentFixture(t);
   assert.equal(written.snapshot.formatVersion, 2);
   assert.match(written.snapshot.checksum ?? '', /^[a-f0-9]{64}$/);
+  assert.ok((written.snapshot.termBlocks?.length ?? 0) > 0);
+  const firstPosting = written.snapshot.terms[0]?.postings[0];
+  assert.ok(firstPosting?.positionsEncoded);
+  assert.equal(firstPosting?.positions, undefined);
   assert.deepEqual(readSegment(path, 'products'), written.snapshot);
   assert.deepEqual(readManifest(manifestPath(directory), 'products'), manifest);
   assert.deepEqual(SegmentReader.open(directory, 'products', manifest)?.result(), {

@@ -61,10 +61,14 @@ Each JSON segment contains:
 - Creation timestamp.
 - Changed document IDs, versions, source fields, field lengths, and optional tombstones.
 - Sorted `(field, term)` entries for the changed documents.
-- Sorted postings with document ID, document version, term frequency, and positions.
+- Sorted postings with document ID, document version, term frequency, and `positionsEncoded`.
+- VByte delta-gap position encoding, with legacy `positions` arrays accepted during recovery.
+- Bounded `termBlocks` metadata containing sorted term ranges, shared prefixes, offsets, and lengths.
 - A SHA-256 checksum over the canonical payload without the checksum header.
 
-JSON is intentionally not described as compressed. It remains inspectable while the logical posting contract is moved to multiple immutable segments. The reader resolves the newest version for each document across the active list before calculating global document frequency and average field lengths. Compaction writes one consolidated live-document segment, atomically swaps the manifest, and purges tombstones and superseded versions.
+JSON remains inspectable while posting positions are compacted as base64-encoded VByte delta gaps and sorted terms are grouped into bounded dictionary blocks. The reader resolves the newest version for each document across the active list before calculating global document frequency and average field lengths. Compaction writes one consolidated live-document segment, atomically swaps the manifest, and purges tombstones and superseded versions.
+
+Snapshot archives are gzip-compressed JSON envelopes containing a SQLite `VACUUM INTO` database payload, active manifests, and only the segment files referenced by those manifests. Archive paths and checksums are validated before restore.
 
 ## Filesystem failure window
 

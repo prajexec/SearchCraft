@@ -18,7 +18,7 @@ The Phase 1 in-process index stores:
 }
 ```
 
-Each indexed document also stores its configured field lengths and the stored source fields returned in a hit. Updating a document removes its existing postings before adding postings for the new version. Deleting a document removes it from the active in-process index and persists a SQLite tombstone.
+Each indexed document also stores its configured field lengths and the stored source fields returned in a hit. Updating a document removes its existing postings before adding postings for the new version. Deleting a document removes it from the active in-process index and persists a SQLite tombstone. New segment postings encode sorted token positions as VByte delta gaps; readers decode them into the same in-process position lists and retain compatibility with legacy uncompressed arrays.
 
 The persisted representation is a set of inspectable JSON segments. Each segment is versioned with `magic: SEARCHCRAFT_SEGMENT`, carries a checksum, and contains one indexing mutation or one compacted live view. A manifest atomically publishes the complete active segment list. The segment reader resolves the highest document version across that list; a tombstone hides every older posting until compaction purges it.
 
@@ -46,11 +46,17 @@ Where:
 
 Scores are summed across query terms and searchable fields. Each field has a positive configured boost. Query terms are deduplicated after tokenization so repeating a term in the query does not accidentally multiply its contribution. Results are ordered by score descending and document ID ascending for deterministic ties.
 
+Phrase searches set `phrase=true` on the search API. Terms must occur in order within one searchable field. With the default `slop=0`, each term must be adjacent; a positive slop permits that many total unmatched token gaps while preserving order. Phrase candidates are filtered by positions before their BM25 scores are calculated.
+
 ## Pagination
 
 Search returns exact `totalHits` for the current in-memory generation. A cursor encodes the last returned score and ID as base64url JSON. The next page contains hits with a lower score, or the same score and a lexicographically greater ID. This gives stable pagination for an unchanged generation without offset scanning.
 
 The cursor is not a promise that results remain stable after an update. Clients should treat `indexVersion` as the generation observed and restart pagination if they require a consistent result set across mutations.
+
+## Term dictionary blocks
+
+Sorted serialized terms are grouped into bounded blocks of 16 entries. Each block records its first and last term, shared prefix, offset, and length. Readers validate block ordering and can locate a candidate block with binary search before examining terms within it. The flat term array remains available for compatibility and inspectability while the block metadata establishes the format for bounded dictionary lookup.
 
 ## Filters and query safeguards
 
@@ -71,7 +77,7 @@ Each index also bounds unique query terms with `maxQueryTerms` (default `32`). Q
 ## Current limitations
 
 - All candidates are scored in memory after posting lookup.
-- Posting lists and term dictionaries are not compressed.
-- JSON segments are intentionally inspectable rather than compressed; compaction currently materializes the resolved live view in memory.
-- Phrase queries, filters, range scoring, synonyms, stemming, and vector search are not implemented.
+- Posting metadata remains JSON and compaction currently materializes the resolved live view in memory.
+- Phrase slop is ordered-gap matching rather than a full positional edit-distance model.
+- Synonyms, stemming, and vector search are not implemented.
 - The multi-segment reader and compactor preserve the version and tombstone invariants tested here. Compaction writes only winning live documents, so deleted tombstones and superseded versions do not contribute to later global statistics.

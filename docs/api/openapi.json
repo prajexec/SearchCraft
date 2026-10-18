@@ -450,6 +450,28 @@
               "type": "string"
             },
             "example": "{\"category\":\"laptop\",\"price\":{\"gte\":500}}"
+          },
+          {
+            "name": "phrase",
+            "in": "query",
+            "required": false,
+            "description": "Require query terms to occur in order in one field.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "slop",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of unmatched token gaps allowed between ordered phrase terms; requires phrase=true.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 0
+            }
           }
         ],
         "responses": {

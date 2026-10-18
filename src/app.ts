@@ -183,6 +183,26 @@ function parseLimit(value: string | null): number {
   return limit;
 }
 
+function parsePhraseOptions(url: URL): { readonly phrase: boolean; readonly slop: number } {
+  const phraseValue = url.searchParams.get('phrase');
+  const slopValue = url.searchParams.get('slop');
+  if (phraseValue !== null && phraseValue !== 'true' && phraseValue !== 'false') {
+    throw new AppError(400, 'invalid_phrase', 'phrase must be true or false');
+  }
+  const phrase = phraseValue === 'true';
+  if (slopValue !== null && !phrase) {
+    throw new AppError(400, 'invalid_phrase', 'slop requires phrase=true');
+  }
+  if (slopValue === null || slopValue === '') {
+    return { phrase, slop: 0 };
+  }
+  const slop = Number(slopValue);
+  if (!Number.isSafeInteger(slop) || slop < 0 || slop > 100) {
+    throw new AppError(400, 'invalid_phrase', 'slop must be an integer between 0 and 100');
+  }
+  return { phrase, slop };
+}
+
 function requireJobId(value: string): string {
   const jobId = decodePathSegment(value);
   if (!/^[a-f0-9-]{36}$/.test(jobId)) {
@@ -323,6 +343,7 @@ async function handleRequest(
       }
       const limit = parseLimit(url.searchParams.get('limit'));
       const cursor = url.searchParams.get('cursor') ?? undefined;
+      const phraseOptions = parsePhraseOptions(url);
       let filters: SearchFilters;
       try {
         filters = parseFilters(
@@ -338,7 +359,7 @@ async function handleRequest(
       const startedSearchAt = performance.now();
       let result;
       try {
-        result = indexManager.search(indexName, query, limit, cursor, filters);
+        result = indexManager.search(indexName, query, limit, cursor, filters, phraseOptions);
       } catch (error) {
         if (error instanceof Error && error.message === 'invalid_cursor') {
           throw new AppError(400, 'invalid_cursor', 'The cursor is not valid for this search');

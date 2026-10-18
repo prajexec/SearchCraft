@@ -129,6 +129,25 @@ test('index, document, search, delete, pagination, and restart recovery work tog
     assert.ok(firstPage.nextCursor !== null);
     assert.ok(firstPage.indexVersion >= 4);
 
+    const phraseResponse = await fetch(
+      `${baseUrl}/v1/indexes/products/search?q=MacBook%20Air&phrase=true`,
+    );
+    assert.equal(phraseResponse.status, 200);
+    const phraseBody = (await phraseResponse.json()) as {
+      hits: Array<{ id: string }>;
+      totalHits: number;
+    };
+    assert.equal(phraseBody.totalHits, 1);
+    assert.deepEqual(
+      phraseBody.hits.map((hit) => hit.id),
+      ['one'],
+    );
+
+    const invalidPhrase = await fetch(
+      `${baseUrl}/v1/indexes/products/search?q=MacBook%20Air&slop=1`,
+    );
+    assert.equal(invalidPhrase.status, 400);
+
     const filteredResponse = await fetch(
       `${baseUrl}/v1/indexes/products/search?q=laptop&filter=${encodeURIComponent(JSON.stringify({ category: 'laptop', price: { gte: 500 } }))}`,
     );
